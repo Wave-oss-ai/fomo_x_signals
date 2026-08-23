@@ -372,7 +372,11 @@ def api_data():
             best_by_key[key] = r
     rows = list(best_by_key.values())
 
-    rows.sort(key=lambda r: r["score"], reverse=True)
+    # Biggest current gainers first -- this is a read on momentum happening
+    # right now, not a prediction of what happens next. Attention Score
+    # (once X_BEARER_TOKEN is set) is the tiebreaker. Tokens with no market
+    # cap reading yet sink to the bottom instead of interrupting the ranking.
+    rows.sort(key=lambda r: (r["pct_change"] if r["pct_change"] is not None else float("-inf"), r["score"]), reverse=True)
 
     total_mentions = sum(r["mention_count"] for r in rows)
     high_attention = sum(1 for r in rows if r["high_attention"])
