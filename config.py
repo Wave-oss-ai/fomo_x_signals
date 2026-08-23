@@ -31,6 +31,11 @@ HIGH_PRIORITY_VELOCITY_PCT = int(os.getenv("HIGH_PRIORITY_VELOCITY_PCT", "20"))
 
 DB_PATH = os.getenv("DB_PATH", "signals.db")
 
+# How often (seconds) to re-check each tracked token's market cap. Free
+# (pump.fun's own public API, no billing), so this can run tight without
+# adding to X API spend.
+MARKET_CAP_REFRESH_SEC = int(os.getenv("MARKET_CAP_REFRESH_SEC", "10"))
+
 # Optional: specific X accounts (no @) whose posts about a token count extra,
 # e.g. well-known callers/KOLs you personally trust. Leave empty to skip.
 WATCH_ACCOUNTS = [

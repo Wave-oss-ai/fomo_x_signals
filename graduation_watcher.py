@@ -19,7 +19,7 @@ import requests
 import websockets
 
 import db
-from config import PUMPPORTAL_API_KEY
+from config import PUMPPORTAL_API_KEY, MARKET_CAP_REFRESH_SEC
 
 WS_URL = f"wss://pumpportal.fun/api/data?api-key={PUMPPORTAL_API_KEY}" if PUMPPORTAL_API_KEY else "wss://pumpportal.fun/api/data"
 
@@ -56,7 +56,7 @@ def _fetch_market_cap(mint):
     return market_cap_usd
 
 
-async def refresh_market_caps(interval_sec=30):
+async def refresh_market_caps(interval_sec=MARKET_CAP_REFRESH_SEC):
     """Periodically re-fetches each tracked token's current market cap so the
     dashboard can show gain/loss since graduation, and how much it moved
     since the *previous* refresh -- that recent-velocity figure is what
