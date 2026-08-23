@@ -15,6 +15,7 @@ import asyncio
 import json
 import time
 
+import requests
 import websockets
 
 import db
@@ -30,6 +31,24 @@ def _extract(event: dict, *keys, default=None):
         if k in event and event[k] not in (None, ""):
             return event[k]
     return default
+
+
+def _fetch_metadata(mint):
+    """PumpPortal's migration event doesn't include the token's name/symbol,
+    so look it up from pump.fun's own public coin API as a fallback. Best
+    effort only -- any failure just leaves the name/symbol blank rather than
+    holding up the watcher loop."""
+    try:
+        resp = requests.get(
+            f"https://frontend-api-v3.pump.fun/coins/{mint}",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("symbol"), data.get("name")
+    except Exception:
+        return None, None
 
 
 async def watch(on_graduation=None, on_new_token=None, reconnect_delay=5):
@@ -64,6 +83,10 @@ async def watch(on_graduation=None, on_new_token=None, reconnect_delay=5):
                     is_migration = "migrat" in kind or "graduat" in kind or event.get("pool") == "pump-amm"
 
                     if is_migration:
+                        if not symbol or not name:
+                            fetched_symbol, fetched_name = await asyncio.to_thread(_fetch_metadata, mint)
+                            symbol = symbol or fetched_symbol
+                            name = name or fetched_name
                         db.record_graduation(mint, symbol, name, raw, when=now)
                         record = {"mint": mint, "symbol": symbol, "name": name, "graduated_at": now}
                         print(f"[graduation] {symbol or mint} graduated at {time.strftime('%H:%M:%S', time.localtime(now))}")
