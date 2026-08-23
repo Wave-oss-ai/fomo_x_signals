@@ -17,6 +17,7 @@ from flask import Flask, jsonify, render_template_string
 
 import db
 import correlate
+from config import MIN_MARKET_CAP_USD
 
 app = Flask(__name__)
 DEMO_MODE = os.environ.get("FOMO_DEMO_MODE") == "1"
@@ -329,16 +330,13 @@ def add_cors_headers(response):
 def api_data():
     graduations = db.recent_graduations()
     rows = []
-    total_mentions = 0
-    high_attention = 0
 
     for g in graduations:
-        stats = correlate.attention_score(g["mint"])
-        total_mentions += stats["count"]
-        is_high = stats["score"] >= 50  # "High" band or above
-        if is_high:
-            high_attention += 1
         market_cap_usd = g["market_cap_usd"]
+        if market_cap_usd is not None and market_cap_usd < MIN_MARKET_CAP_USD:
+            continue  # crashed/rugged -- not worth showing
+
+        stats = correlate.attention_score(g["mint"])
         grad_market_cap_usd = g["graduation_market_cap_usd"]
         pct_change = None
         if market_cap_usd is not None and grad_market_cap_usd:
@@ -357,16 +355,31 @@ def api_data():
             "band": stats["band"],
             "pattern": stats["pattern"],
             "bot_mentions_excluded": stats["bot_mentions_excluded"],
-            "high_attention": is_high,
+            "high_attention": stats["score"] >= 50,  # "High" band or above
             "market_cap_usd": market_cap_usd,
             "pct_change": pct_change,
         })
 
+    # pump.fun lets anyone reuse a popular name/ticker for a brand-new,
+    # unrelated mint, so the same symbol can show up over and over from
+    # copycat launches. Keep just the highest-market-cap mint per
+    # symbol/name so the list doesn't repeat "the same" token.
+    best_by_key = {}
+    for r in rows:
+        key = (r["symbol"] or r["name"] or r["mint"]).lower()
+        existing = best_by_key.get(key)
+        if existing is None or (r["market_cap_usd"] or 0) > (existing["market_cap_usd"] or 0):
+            best_by_key[key] = r
+    rows = list(best_by_key.values())
+
     rows.sort(key=lambda r: r["score"], reverse=True)
+
+    total_mentions = sum(r["mention_count"] for r in rows)
+    high_attention = sum(1 for r in rows if r["high_attention"])
 
     return jsonify({
         "stats": {
-            "tracked": len(graduations),
+            "tracked": len(rows),
             "total_mentions": total_mentions,
             "high_attention": high_attention,
         },

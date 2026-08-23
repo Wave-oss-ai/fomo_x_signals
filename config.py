@@ -18,6 +18,11 @@ MENTION_WATCH_WINDOW_MIN = int(os.getenv("MENTION_WATCH_WINDOW_MIN", "120"))
 MENTION_POLL_INTERVAL_SEC = int(os.getenv("MENTION_POLL_INTERVAL_SEC", "90"))
 ATTENTION_MENTION_THRESHOLD = int(os.getenv("ATTENTION_MENTION_THRESHOLD", "8"))
 
+# Tokens whose market cap has crashed below this are hidden from the
+# dashboard -- below this level a pump.fun token is effectively dead/rugged
+# and just clutters the list.
+MIN_MARKET_CAP_USD = int(os.getenv("MIN_MARKET_CAP_USD", "5000"))
+
 DB_PATH = os.getenv("DB_PATH", "signals.db")
 
 # Optional: specific X accounts (no @) whose posts about a token count extra,
