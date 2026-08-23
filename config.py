@@ -15,7 +15,7 @@ PUMPPORTAL_API_KEY = os.getenv("PUMPPORTAL_API_KEY", "")
 X_BEARER_TOKEN = os.getenv("X_BEARER_TOKEN", "")
 
 MENTION_WATCH_WINDOW_MIN = int(os.getenv("MENTION_WATCH_WINDOW_MIN", "120"))
-MENTION_POLL_INTERVAL_SEC = int(os.getenv("MENTION_POLL_INTERVAL_SEC", "90"))
+MENTION_POLL_INTERVAL_SEC = int(os.getenv("MENTION_POLL_INTERVAL_SEC", "300"))
 ATTENTION_MENTION_THRESHOLD = int(os.getenv("ATTENTION_MENTION_THRESHOLD", "8"))
 
 # Tokens whose market cap has crashed below this are hidden from the
