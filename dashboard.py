@@ -360,17 +360,43 @@ def api_data():
             "pct_change": pct_change,
         })
 
-    # pump.fun lets anyone reuse a popular name/ticker for a brand-new,
-    # unrelated mint, so the same symbol can show up over and over from
-    # copycat launches. Keep just the highest-market-cap mint per
-    # symbol/name so the list doesn't repeat "the same" token.
-    best_by_key = {}
-    for r in rows:
-        key = (r["symbol"] or r["name"] or r["mint"]).lower()
-        existing = best_by_key.get(key)
+    # pump.fun lets anyone reuse a popular name AND/OR ticker for a
+    # brand-new, unrelated mint, so copycats can share just the name, just
+    # the symbol, or both. Union-find groups any tokens connected by either
+    # matching field, then we keep only the highest-market-cap mint per
+    # group so the list doesn't repeat what looks like "the same" token.
+    parent = list(range(len(rows)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i, j):
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[rj] = ri
+
+    for key_fn in (lambda r: r["name"], lambda r: r["symbol"]):
+        first_seen = {}
+        for i, r in enumerate(rows):
+            key = key_fn(r)
+            if not key:
+                continue
+            key = key.lower().strip()
+            if key in first_seen:
+                union(first_seen[key], i)
+            else:
+                first_seen[key] = i
+
+    best_by_group = {}
+    for i, r in enumerate(rows):
+        root = find(i)
+        existing = best_by_group.get(root)
         if existing is None or (r["market_cap_usd"] or 0) > (existing["market_cap_usd"] or 0):
-            best_by_key[key] = r
-    rows = list(best_by_key.values())
+            best_by_group[root] = r
+    rows = list(best_by_group.values())
 
     # Biggest current gainers first -- this is a read on momentum happening
     # right now, not a prediction of what happens next. Attention Score
