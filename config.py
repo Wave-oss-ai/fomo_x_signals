@@ -36,6 +36,19 @@ DB_PATH = os.getenv("DB_PATH", "signals.db")
 # adding to X API spend.
 MARKET_CAP_REFRESH_SEC = int(os.getenv("MARKET_CAP_REFRESH_SEC", "10"))
 
+# Pre-market watch: search X for mentions of tokens that were just CREATED
+# on pump.fun, before they've graduated -- catches hype building early. Kept
+# short/slow by default on purpose: there are far more new token launches
+# than graduations, so watching all of them for as long/as often as
+# graduated tokens would multiply X API spend fast.
+PRE_MARKET_WATCH_WINDOW_MIN = int(os.getenv("PRE_MARKET_WATCH_WINDOW_MIN", "15"))
+PRE_MARKET_POLL_INTERVAL_SEC = int(os.getenv("PRE_MARKET_POLL_INTERVAL_SEC", "180"))
+
+# Off by default -- new pump.fun launches vastly outnumber graduations, so
+# this can burn through X API spend much faster than graduation-only
+# tracking. Set to "1" (as an env var/Secret) once you're ready to pay for it.
+ENABLE_PRE_MARKET_SCAN = os.getenv("ENABLE_PRE_MARKET_SCAN") == "1"
+
 # Optional: specific X accounts (no @) whose posts about a token count extra,
 # e.g. well-known callers/KOLs you personally trust. Leave empty to skip.
 WATCH_ACCOUNTS = [

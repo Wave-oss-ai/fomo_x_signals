@@ -17,7 +17,7 @@ from flask import Flask, jsonify, render_template_string
 
 import db
 import correlate
-from config import MIN_MARKET_CAP_USD, HIGH_PRIORITY_VELOCITY_PCT
+from config import MIN_MARKET_CAP_USD, HIGH_PRIORITY_VELOCITY_PCT, PRE_MARKET_WATCH_WINDOW_MIN
 
 app = Flask(__name__)
 DEMO_MODE = os.environ.get("FOMO_DEMO_MODE") == "1"
@@ -169,12 +169,17 @@ PAGE = """
 
   <div class="stats" id="stats"></div>
 
+  <div class="tabs" id="view-tabs">
+    <button class="tab active" data-view="graduated">Graduated</button>
+    <button class="tab" data-view="premarket">&#128293; Pre-Market Hype</button>
+  </div>
+
   <div class="tabs" id="tabs">
     <button class="tab active" data-filter="all">All</button>
     <button class="tab" data-filter="Broader interest">Broader Interest</button>
     <button class="tab" data-filter="Concentrated activity">Concentrated Activity</button>
   </div>
-  <p class="tab-note">Based on how many different people are posting vs. one or two accounts repeating themselves -- not a safety rating. Every token here carries real risk either way.</p>
+  <p class="tab-note" id="tab-note">Based on how many different people are posting vs. one or two accounts repeating themselves -- not a safety rating. Every token here carries real risk either way.</p>
 
   <div id="table-wrap"></div>
 
@@ -222,9 +227,55 @@ function copyMint(mint, el) {
 window.copyMint = copyMint;
 
 let latestRows = [];
+let latestPreMarketRows = [];
 let activeFilter = 'all';
+let activeView = 'graduated';
+
+function renderPreMarketTable() {
+  const wrap = document.getElementById('table-wrap');
+
+  if (!latestPreMarketRows.length) {
+    wrap.innerHTML = `<div class="empty">No pre-market hype detected yet -- watching new pump.fun launches (not yet graduated) for early X mentions.</div>`;
+    return;
+  }
+
+  const rows = latestPreMarketRows.map(r => `
+    <tr>
+      <td>
+        <div class="token-name">${r.name || r.symbol || '?'}</div>
+        <div class="token-symbol">${r.symbol ? '$' + r.symbol : ''}</div>
+      </td>
+      <td>${scoreBadge(r.score, r.band)}</td>
+      <td>${r.pattern}</td>
+      <td>${timeAgo(r.created_at)}</td>
+      <td class="num">${r.mention_count}${r.bot_mentions_excluded ? `<div class="bot-note">${r.bot_mentions_excluded} bot-like excluded</div>` : ''}</td>
+      <td class="num">${r.distinct_authors}</td>
+      <td>${timeAgo(r.first_mention_at)}</td>
+      <td class="mint">
+        <div class="mint-cell">
+          <span>${r.mint}</span>
+          <button class="copy-btn" onclick="copyMint('${r.mint}', this)">Copy</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+
+  wrap.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Token</th><th>Attention Score</th><th>Pattern</th><th>Created</th><th>Mentions</th><th>Authors</th><th>First Mention</th><th>Mint</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
 
 function renderTable() {
+  if (activeView === 'premarket') {
+    renderPreMarketTable();
+    return;
+  }
+
   const wrap = document.getElementById('table-wrap');
 
   if (!latestRows.length) {
@@ -278,9 +329,20 @@ function renderTable() {
 document.getElementById('tabs').addEventListener('click', (e) => {
   const btn = e.target.closest('.tab');
   if (!btn) return;
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('#tabs .tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
   activeFilter = btn.dataset.filter;
+  renderTable();
+});
+
+document.getElementById('view-tabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('.tab');
+  if (!btn) return;
+  document.querySelectorAll('#view-tabs .tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  activeView = btn.dataset.view;
+  document.getElementById('tabs').style.display = activeView === 'premarket' ? 'none' : 'flex';
+  document.getElementById('tab-note').style.display = activeView === 'premarket' ? 'none' : 'block';
   renderTable();
 });
 
@@ -300,9 +362,11 @@ async function refresh() {
     <div class="stat-tile"><div class="value">${data.stats.total_mentions}</div><div class="label">X mentions collected</div></div>
     <div class="stat-tile"><div class="value">${data.stats.high_attention}</div><div class="label">High-attention alerts</div></div>
     <div class="stat-tile"><div class="value">${data.stats.high_priority}</div><div class="label">&#128293; High priority (big movers)</div></div>
+    <div class="stat-tile"><div class="value">${data.stats.pre_market_hype}</div><div class="label">&#128293; Pre-market hype</div></div>
   `;
 
   latestRows = data.rows;
+  latestPreMarketRows = data.pre_market_rows || [];
   renderTable();
 }
 
@@ -410,14 +474,39 @@ def api_data():
     high_attention = sum(1 for r in rows if r["high_attention"])
     high_priority = sum(1 for r in rows if r["is_high_priority"])
 
+    # Pre-market: tokens that haven't graduated yet but are already showing
+    # X hype. Only surface ones with at least one real mention -- otherwise
+    # this would just be a list of every new pump.fun launch, which is noise.
+    pre_market_rows = []
+    for t in db.recent_new_tokens(since_minutes=PRE_MARKET_WATCH_WINDOW_MIN):
+        stats = correlate.attention_score(t["mint"])
+        if stats["count"] == 0:
+            continue
+        pre_market_rows.append({
+            "symbol": t["symbol"],
+            "name": t["name"],
+            "mint": t["mint"],
+            "created_at": t["created_at"],
+            "mention_count": stats["count"],
+            "distinct_authors": stats["distinct_authors"],
+            "first_mention_at": stats["first_mention_at"],
+            "score": stats["score"],
+            "band": stats["band"],
+            "pattern": stats["pattern"],
+            "bot_mentions_excluded": stats["bot_mentions_excluded"],
+        })
+    pre_market_rows.sort(key=lambda r: r["score"], reverse=True)
+
     return jsonify({
         "stats": {
             "tracked": len(rows),
             "total_mentions": total_mentions,
             "high_attention": high_attention,
             "high_priority": high_priority,
+            "pre_market_hype": len(pre_market_rows),
         },
         "rows": rows,
+        "pre_market_rows": pre_market_rows,
     })
 
 

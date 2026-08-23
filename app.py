@@ -73,7 +73,7 @@ import db  # noqa: E402
 import graduation_watcher  # noqa: E402
 import twitter_scanner  # noqa: E402
 from dashboard import app as flask_app  # noqa: E402
-from config import ATTENTION_MENTION_THRESHOLD  # noqa: E402
+from config import ATTENTION_MENTION_THRESHOLD, ENABLE_PRE_MARKET_SCAN  # noqa: E402
 
 _alerted = set()
 
@@ -97,6 +97,15 @@ def run_scanner():
     twitter_scanner.run_forever(on_mentions=on_mentions)
 
 
+def on_pre_market_mentions(new_token_row, new_count):
+    symbol = new_token_row["symbol"] or new_token_row["mint"]
+    print(f"[pre-market] {symbol}: +{new_count} new mention(s) before graduation")
+
+
+def run_pre_market_scanner():
+    twitter_scanner.run_forever_new_tokens(on_mentions=on_pre_market_mentions)
+
+
 def run_dashboard():
     flask_app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
 
@@ -111,6 +120,10 @@ def main():
     print("Leave this window open -- closing it (or Ctrl+C) stops everything.\n")
 
     threading.Thread(target=run_scanner, daemon=True).start()
+    if ENABLE_PRE_MARKET_SCAN:
+        threading.Thread(target=run_pre_market_scanner, daemon=True).start()
+    else:
+        print("[pre-market] disabled -- set ENABLE_PRE_MARKET_SCAN=1 to turn on pre-graduation X hype scanning")
     threading.Thread(target=run_dashboard, daemon=True).start()
 
     if not IS_HOSTED:

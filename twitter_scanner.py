@@ -27,6 +27,8 @@ from config import (
     MENTION_POLL_INTERVAL_SEC,
     WATCH_ACCOUNTS,
     WATCH_KEYWORDS,
+    PRE_MARKET_WATCH_WINDOW_MIN,
+    PRE_MARKET_POLL_INTERVAL_SEC,
 )
 
 SEARCH_URL = "https://api.x.com/2/tweets/search/recent"
@@ -189,6 +191,65 @@ def run_forever(on_mentions=None):
     while True:
         poll_once(on_mentions=on_mentions)
         time.sleep(MENTION_POLL_INTERVAL_SEC)
+
+
+def poll_new_tokens_once(on_mentions=None):
+    """Same idea as poll_once(), but for tokens that were just CREATED --
+    not yet graduated -- so hype building pre-market shows up before the
+    token ever hits the graduated list. Kept to a short watch window and
+    slow interval by default (see config.py) since there are far more new
+    launches than graduations."""
+    new_tokens = db.recent_new_tokens(since_minutes=PRE_MARKET_WATCH_WINDOW_MIN)
+    for t in new_tokens:
+        query = build_query(t["symbol"], t["mint"])
+        try:
+            tweets, users = search_recent(query)
+        except Exception as e:
+            print(f"[twitter_scanner] pre-market search failed for {t['symbol'] or t['mint']}: {e}")
+            continue
+
+        new_count = 0
+        for tw in tweets:
+            if db.mention_exists(tw["id"]):
+                continue
+            try:
+                posted_at = _to_epoch(tw["created_at"])
+            except Exception:
+                posted_at = time.time()
+
+            user = users.get(tw.get("author_id"))
+            followers = None
+            account_age_days = None
+            if user:
+                followers = (user.get("public_metrics") or {}).get("followers_count")
+                created_at = user.get("created_at")
+                if created_at:
+                    try:
+                        account_age_days = (time.time() - _to_epoch(created_at)) / 86400
+                    except Exception:
+                        account_age_days = None
+
+            db.record_mention(
+                tweet_id=tw["id"],
+                mint=t["mint"],
+                author=user.get("username") if user else tw.get("author_id"),
+                text=tw.get("text", ""),
+                posted_at=posted_at,
+                matched_query=query,
+                author_followers=followers,
+                account_age_days=account_age_days,
+                likely_bot=looks_like_bot(user),
+            )
+            new_count += 1
+
+        if new_count and on_mentions:
+            on_mentions(t, new_count)
+
+
+def run_forever_new_tokens(on_mentions=None):
+    while True:
+        poll_new_tokens_once(on_mentions=on_mentions)
+        time.sleep(PRE_MARKET_POLL_INTERVAL_SEC)
 
 
 if __name__ == "__main__":

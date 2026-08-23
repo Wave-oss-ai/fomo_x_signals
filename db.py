@@ -127,6 +127,22 @@ def recent_graduations(since_minutes=None):
         return [dict(r) for r in rows]
 
 
+def recent_new_tokens(since_minutes):
+    """Tokens created recently that HAVEN'T graduated yet -- used to watch
+    for X hype building before a token ever hits the market. Excludes
+    anything that's already in the graduations table so it doesn't
+    duplicate the main list once a watched token graduates."""
+    with get_conn() as conn:
+        cutoff = time.time() - since_minutes * 60
+        rows = conn.execute(
+            """SELECT * FROM new_tokens
+               WHERE created_at >= ? AND mint NOT IN (SELECT mint FROM graduations)
+               ORDER BY created_at DESC""",
+            (cutoff,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def mention_exists(tweet_id):
     with get_conn() as conn:
         row = conn.execute("SELECT 1 FROM mentions WHERE tweet_id = ?", (tweet_id,)).fetchone()
