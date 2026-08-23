@@ -402,14 +402,9 @@ def api_data():
     rows = list(best_by_group.values())
 
     # High-priority (actively pushing right now) tokens float to the very
-    # top, then biggest current gainers, then Attention Score as tiebreaker.
-    # Tokens with no reading yet sink to the bottom instead of interrupting
-    # the ranking. This is a read on momentum, not a prediction.
-    rows.sort(key=lambda r: (
-        r["is_high_priority"],
-        r["pct_change"] if r["pct_change"] is not None else float("-inf"),
-        r["score"],
-    ), reverse=True)
+    # top; within that, newest graduations first so fresh tokens don't get
+    # buried under older ones as the list grows.
+    rows.sort(key=lambda r: (r["is_high_priority"], r["graduated_at"]), reverse=True)
 
     total_mentions = sum(r["mention_count"] for r in rows)
     high_attention = sum(1 for r in rows if r["high_attention"])
