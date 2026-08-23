@@ -23,6 +23,12 @@ ATTENTION_MENTION_THRESHOLD = int(os.getenv("ATTENTION_MENTION_THRESHOLD", "8"))
 # and just clutters the list.
 MIN_MARKET_CAP_USD = int(os.getenv("MIN_MARKET_CAP_USD", "5000"))
 
+# A token whose market cap jumps at least this much (%) between two
+# consecutive refreshes gets flagged "High Priority" -- this catches a push
+# WHILE it's happening (recent velocity), not just after it's already run
+# up. Not a prediction it'll keep moving.
+HIGH_PRIORITY_VELOCITY_PCT = int(os.getenv("HIGH_PRIORITY_VELOCITY_PCT", "20"))
+
 DB_PATH = os.getenv("DB_PATH", "signals.db")
 
 # Optional: specific X accounts (no @) whose posts about a token count extra,

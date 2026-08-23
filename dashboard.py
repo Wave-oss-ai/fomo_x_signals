@@ -17,7 +17,7 @@ from flask import Flask, jsonify, render_template_string
 
 import db
 import correlate
-from config import MIN_MARKET_CAP_USD
+from config import MIN_MARKET_CAP_USD, HIGH_PRIORITY_VELOCITY_PCT
 
 app = Flask(__name__)
 DEMO_MODE = os.environ.get("FOMO_DEMO_MODE") == "1"
@@ -119,6 +119,7 @@ PAGE = """
 
   table { width: 100%; border-collapse: collapse; background: var(--surface-1);
           border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  tr.high-priority { background: var(--critical-bg); }
   th, td { text-align: left; padding: 10px 14px; font-size: 13px; border-bottom: 1px solid var(--grid); }
   th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
   tbody tr:last-child td { border-bottom: none; }
@@ -160,8 +161,7 @@ PAGE = """
 </head>
 <body>
   <h1>fomo_x_signals</h1>
-  <p class="sub">Solana pump.fun-style graduations, cross-referenced with X mentions. Refreshes every 5s.<br>
-  Attention Score (0-100) measures social buzz -- mention volume, how many different people are posting, and how fast it's picking up -- not price. Accounts that look automated (brand-new + high-volume, zero followers + mass-posting, or a generated-looking handle) are filtered out before scoring, and the count still tells you how many got excluded. This is a heuristic, not certainty, and can't tell a genuine trend from a coordinated pump. Not financial advice.</p>
+  <p class="sub">Solana pump.fun-style graduations, cross-referenced with X mentions. Refreshes every 5s. &#128293; High Priority = moving right now, not a prediction it keeps moving. Heuristics, not certainty -- not financial advice.</p>
 
   {% if demo %}
   <div class="demo-banner">&#9888; Preview mode -- this is sample data, not live. Add your API keys and run <code>start.bat</code> for the real thing.</div>
@@ -242,9 +242,9 @@ function renderTable() {
   }
 
   const rows = filtered.map((r, i) => `
-    <tr>
+    <tr class="${r.is_high_priority ? 'high-priority' : ''}">
       <td>
-        <div class="token-name">${r.name || r.symbol || '?'}</div>
+        <div class="token-name">${r.is_high_priority ? '&#128293; ' : ''}${r.name || r.symbol || '?'}</div>
         <div class="token-symbol">${r.symbol ? '$' + r.symbol : ''}</div>
       </td>
       <td>${scoreBadge(r.score, r.band)}</td>
@@ -299,6 +299,7 @@ async function refresh() {
     <div class="stat-tile"><div class="value">${data.stats.tracked}</div><div class="label">Graduations tracked</div></div>
     <div class="stat-tile"><div class="value">${data.stats.total_mentions}</div><div class="label">X mentions collected</div></div>
     <div class="stat-tile"><div class="value">${data.stats.high_attention}</div><div class="label">High-attention alerts</div></div>
+    <div class="stat-tile"><div class="value">${data.stats.high_priority}</div><div class="label">&#128293; High priority (big movers)</div></div>
   `;
 
   latestRows = data.rows;
@@ -358,6 +359,8 @@ def api_data():
             "high_attention": stats["score"] >= 50,  # "High" band or above
             "market_cap_usd": market_cap_usd,
             "pct_change": pct_change,
+            "recent_velocity_pct": g["recent_velocity_pct"],
+            "is_high_priority": g["recent_velocity_pct"] is not None and g["recent_velocity_pct"] >= HIGH_PRIORITY_VELOCITY_PCT,
         })
 
     # pump.fun lets anyone reuse a popular name AND/OR ticker for a
@@ -398,20 +401,26 @@ def api_data():
             best_by_group[root] = r
     rows = list(best_by_group.values())
 
-    # Biggest current gainers first -- this is a read on momentum happening
-    # right now, not a prediction of what happens next. Attention Score
-    # (once X_BEARER_TOKEN is set) is the tiebreaker. Tokens with no market
-    # cap reading yet sink to the bottom instead of interrupting the ranking.
-    rows.sort(key=lambda r: (r["pct_change"] if r["pct_change"] is not None else float("-inf"), r["score"]), reverse=True)
+    # High-priority (actively pushing right now) tokens float to the very
+    # top, then biggest current gainers, then Attention Score as tiebreaker.
+    # Tokens with no reading yet sink to the bottom instead of interrupting
+    # the ranking. This is a read on momentum, not a prediction.
+    rows.sort(key=lambda r: (
+        r["is_high_priority"],
+        r["pct_change"] if r["pct_change"] is not None else float("-inf"),
+        r["score"],
+    ), reverse=True)
 
     total_mentions = sum(r["mention_count"] for r in rows)
     high_attention = sum(1 for r in rows if r["high_attention"])
+    high_priority = sum(1 for r in rows if r["is_high_priority"])
 
     return jsonify({
         "stats": {
             "tracked": len(rows),
             "total_mentions": total_mentions,
             "high_attention": high_attention,
+            "high_priority": high_priority,
         },
         "rows": rows,
     })

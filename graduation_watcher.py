@@ -58,12 +58,19 @@ def _fetch_market_cap(mint):
 
 async def refresh_market_caps(interval_sec=30):
     """Periodically re-fetches each tracked token's current market cap so the
-    dashboard can show gain/loss since graduation."""
+    dashboard can show gain/loss since graduation, and how much it moved
+    since the *previous* refresh -- that recent-velocity figure is what
+    catches a push while it's happening, rather than only after the fact."""
     while True:
         for g in db.recent_graduations():
             market_cap_usd = await asyncio.to_thread(_fetch_market_cap, g["mint"])
-            if market_cap_usd is not None:
-                db.update_market_cap(g["mint"], market_cap_usd)
+            if market_cap_usd is None:
+                continue
+            previous = g["market_cap_usd"]
+            recent_velocity_pct = None
+            if previous:
+                recent_velocity_pct = (market_cap_usd - previous) / previous * 100
+            db.update_market_cap(g["mint"], market_cap_usd, recent_velocity_pct)
         await asyncio.sleep(interval_sec)
 
 

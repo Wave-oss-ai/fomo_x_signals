@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS graduations (
     graduated_at REAL NOT NULL,   -- unix timestamp (UTC), time we observed it
     raw_json TEXT,
     market_cap_usd REAL,             -- most recently refreshed market cap
-    graduation_market_cap_usd REAL   -- market cap at the moment we saw it graduate
+    graduation_market_cap_usd REAL,  -- market cap at the moment we saw it graduate
+    recent_velocity_pct REAL         -- % change between the last two refreshes (is it moving *right now*)
 );
 
 CREATE TABLE IF NOT EXISTS new_tokens (
@@ -56,7 +57,7 @@ def init_db():
     with get_conn() as conn:
         conn.executescript(SCHEMA)
         # Migration for DBs created before market cap tracking was added.
-        for column in ("market_cap_usd", "graduation_market_cap_usd"):
+        for column in ("market_cap_usd", "graduation_market_cap_usd", "recent_velocity_pct"):
             try:
                 conn.execute(f"ALTER TABLE graduations ADD COLUMN {column} REAL")
             except sqlite3.OperationalError:
@@ -75,14 +76,15 @@ def record_graduation(mint, symbol, name, raw_json, when=None, market_cap_usd=No
         )
 
 
-def update_market_cap(mint, market_cap_usd):
+def update_market_cap(mint, market_cap_usd, recent_velocity_pct=None):
     with get_conn() as conn:
         conn.execute(
             """UPDATE graduations
                SET market_cap_usd = ?,
-                   graduation_market_cap_usd = COALESCE(graduation_market_cap_usd, ?)
+                   graduation_market_cap_usd = COALESCE(graduation_market_cap_usd, ?),
+                   recent_velocity_pct = ?
                WHERE mint = ?""",
-            (market_cap_usd, market_cap_usd, mint),
+            (market_cap_usd, market_cap_usd, recent_velocity_pct, mint),
         )
 
 
