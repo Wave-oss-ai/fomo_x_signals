@@ -34,10 +34,10 @@ def _extract(event: dict, *keys, default=None):
 
 
 def _fetch_metadata(mint):
-    """PumpPortal's migration event doesn't include the token's name/symbol,
-    so look it up from pump.fun's own public coin API as a fallback. Best
-    effort only -- any failure just leaves the name/symbol blank rather than
-    holding up the watcher loop."""
+    """PumpPortal's migration event doesn't include the token's name/symbol
+    or market cap, so look them up from pump.fun's own public coin API as a
+    fallback. Best effort only -- any failure just leaves the fields blank
+    rather than holding up the watcher loop."""
     try:
         resp = requests.get(
             f"https://frontend-api-v3.pump.fun/coins/{mint}",
@@ -46,9 +46,25 @@ def _fetch_metadata(mint):
         )
         resp.raise_for_status()
         data = resp.json()
-        return data.get("symbol"), data.get("name")
+        return data.get("symbol"), data.get("name"), data.get("usd_market_cap")
     except Exception:
-        return None, None
+        return None, None, None
+
+
+def _fetch_market_cap(mint):
+    _, _, market_cap_usd = _fetch_metadata(mint)
+    return market_cap_usd
+
+
+async def refresh_market_caps(interval_sec=30):
+    """Periodically re-fetches each tracked token's current market cap so the
+    dashboard can show gain/loss since graduation."""
+    while True:
+        for g in db.recent_graduations():
+            market_cap_usd = await asyncio.to_thread(_fetch_market_cap, g["mint"])
+            if market_cap_usd is not None:
+                db.update_market_cap(g["mint"], market_cap_usd)
+        await asyncio.sleep(interval_sec)
 
 
 async def watch(on_graduation=None, on_new_token=None, reconnect_delay=5):
@@ -83,11 +99,10 @@ async def watch(on_graduation=None, on_new_token=None, reconnect_delay=5):
                     is_migration = "migrat" in kind or "graduat" in kind or event.get("pool") == "pump-amm"
 
                     if is_migration:
-                        if not symbol or not name:
-                            fetched_symbol, fetched_name = await asyncio.to_thread(_fetch_metadata, mint)
-                            symbol = symbol or fetched_symbol
-                            name = name or fetched_name
-                        db.record_graduation(mint, symbol, name, raw, when=now)
+                        fetched_symbol, fetched_name, market_cap_usd = await asyncio.to_thread(_fetch_metadata, mint)
+                        symbol = symbol or fetched_symbol
+                        name = name or fetched_name
+                        db.record_graduation(mint, symbol, name, raw, when=now, market_cap_usd=market_cap_usd)
                         record = {"mint": mint, "symbol": symbol, "name": name, "graduated_at": now}
                         print(f"[graduation] {symbol or mint} graduated at {time.strftime('%H:%M:%S', time.localtime(now))}")
                         if on_graduation:

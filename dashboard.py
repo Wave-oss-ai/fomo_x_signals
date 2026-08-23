@@ -43,6 +43,8 @@ PAGE = """
     --critical-bg:    #fbeceb;
     --warning:        #a66a00;
     --warning-bg:     #fdf1d9;
+    --positive:       #1a8a4a;
+    --positive-bg:    #e8f5ec;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) {
@@ -59,6 +61,8 @@ PAGE = """
       --critical-bg:    #3a201f;
       --warning:        #c98500;
       --warning-bg:     #3a2d0d;
+      --positive:       #4ec883;
+      --positive-bg:    #16321f;
     }
   }
   :root[data-theme="dark"] {
@@ -75,6 +79,8 @@ PAGE = """
     --critical-bg:    #3a201f;
     --warning:        #c98500;
     --warning-bg:     #3a2d0d;
+    --positive:       #4ec883;
+    --positive-bg:    #16321f;
   }
 
   * { box-sizing: border-box; }
@@ -131,6 +137,15 @@ PAGE = """
   .badge.muted { color: var(--muted); background: transparent; }
   .badge.critical { color: var(--critical); background: var(--critical-bg); }
   .badge.normal { color: var(--muted); }
+  .badge.positive { color: var(--positive); background: var(--positive-bg); }
+
+  .mint-cell { display: flex; align-items: center; gap: 6px; }
+  .copy-btn {
+    font: inherit; font-size: 10px; cursor: pointer; white-space: nowrap;
+    color: var(--muted); background: transparent; border: 1px solid var(--border);
+    border-radius: 6px; padding: 2px 6px;
+  }
+  .copy-btn:hover { color: var(--text-primary); border-color: var(--series-1); }
 
   .empty { color: var(--text-secondary); font-size: 13px; padding: 24px; text-align: center; }
 
@@ -182,6 +197,29 @@ function scoreBadge(score, band) {
   return `<span class="badge ${cls}">${score} &middot; ${band}</span>`;
 }
 
+function fmtUsd(n) {
+  if (n === null || n === undefined) return '-';
+  if (n >= 1000000) return '$' + (n / 1000000).toFixed(2) + 'M';
+  if (n >= 1000) return '$' + (n / 1000).toFixed(1) + 'K';
+  return '$' + n.toFixed(0);
+}
+
+function fmtPct(n) {
+  if (n === null || n === undefined) return '-';
+  const cls = n > 0 ? 'positive' : n < 0 ? 'critical' : 'normal';
+  const sign = n > 0 ? '+' : '';
+  return `<span class="badge ${cls}">${sign}${n.toFixed(1)}%</span>`;
+}
+
+function copyMint(mint, el) {
+  navigator.clipboard.writeText(mint).then(() => {
+    const original = el.textContent;
+    el.textContent = 'Copied!';
+    setTimeout(() => { el.textContent = original; }, 1200);
+  });
+}
+window.copyMint = copyMint;
+
 let latestRows = [];
 let activeFilter = 'all';
 
@@ -202,7 +240,7 @@ function renderTable() {
     return;
   }
 
-  const rows = filtered.map(r => `
+  const rows = filtered.map((r, i) => `
     <tr>
       <td>
         <div class="token-name">${r.name || r.symbol || '?'}</div>
@@ -211,18 +249,25 @@ function renderTable() {
       <td>${scoreBadge(r.score, r.band)}</td>
       <td>${r.pattern}</td>
       <td>${timeAgo(r.graduated_at)}</td>
+      <td class="num">${fmtUsd(r.market_cap_usd)}</td>
+      <td class="num">${fmtPct(r.pct_change)}</td>
       <td class="num">${r.mention_count}${r.bot_mentions_excluded ? `<div class="bot-note">${r.bot_mentions_excluded} bot-like excluded</div>` : ''}</td>
       <td class="num">${r.distinct_authors}</td>
       <td>${timeAgo(r.first_mention_at)}</td>
       <td>${fmtLead(r.lead_seconds)}</td>
-      <td class="mint">${r.mint}</td>
+      <td class="mint">
+        <div class="mint-cell">
+          <span>${r.mint}</span>
+          <button class="copy-btn" onclick="copyMint('${r.mint}', this)">Copy</button>
+        </div>
+      </td>
     </tr>
   `).join('');
 
   wrap.innerHTML = `
     <table>
       <thead><tr>
-        <th>Token</th><th>Attention Score</th><th>Pattern</th><th>Graduated</th><th>Mentions</th><th>Authors</th><th>First Mention</th><th>Lead / Lag</th><th>Mint</th>
+        <th>Token</th><th>Attention Score</th><th>Pattern</th><th>Graduated</th><th>Market Cap</th><th>% Since Grad</th><th>Mentions</th><th>Authors</th><th>First Mention</th><th>Lead / Lag</th><th>Mint</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
@@ -293,6 +338,12 @@ def api_data():
         is_high = stats["score"] >= 50  # "High" band or above
         if is_high:
             high_attention += 1
+        market_cap_usd = g["market_cap_usd"]
+        grad_market_cap_usd = g["graduation_market_cap_usd"]
+        pct_change = None
+        if market_cap_usd is not None and grad_market_cap_usd:
+            pct_change = (market_cap_usd - grad_market_cap_usd) / grad_market_cap_usd * 100
+
         rows.append({
             "symbol": g["symbol"],
             "name": g["name"],
@@ -307,6 +358,8 @@ def api_data():
             "pattern": stats["pattern"],
             "bot_mentions_excluded": stats["bot_mentions_excluded"],
             "high_attention": is_high,
+            "market_cap_usd": market_cap_usd,
+            "pct_change": pct_change,
         })
 
     rows.sort(key=lambda r: r["score"], reverse=True)

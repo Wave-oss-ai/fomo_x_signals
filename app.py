@@ -118,7 +118,13 @@ def main():
         import webbrowser
         webbrowser.open(f"http://localhost:{PORT}")
 
-    asyncio.run(graduation_watcher.watch(on_graduation=on_graduation))  # runs forever
+    async def run_watchers():
+        await asyncio.gather(
+            graduation_watcher.watch(on_graduation=on_graduation),
+            graduation_watcher.refresh_market_caps(),
+        )
+
+    asyncio.run(run_watchers())  # runs forever
 
 
 if __name__ == "__main__":
