@@ -1,0 +1,6 @@
+.env
+signals.db
+__pycache__/
+*.pyc
+run_stdout.log
+run_stderr.log
