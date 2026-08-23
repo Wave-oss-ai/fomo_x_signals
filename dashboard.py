@@ -162,7 +162,7 @@ PAGE = """
 </head>
 <body>
   <h1>fomo_x_signals</h1>
-  <p class="sub">Solana pump.fun-style graduations, cross-referenced with X mentions. Refreshes every 5s. &#128293; High Priority = moving right now, not a prediction it keeps moving. Heuristics, not certainty -- not financial advice.</p>
+  <p class="sub">Solana pump.fun-style graduations, cross-referenced with X mentions. Refreshes every 2s. &#128293; High Priority = moving right now, not a prediction it keeps moving. Heuristics, not certainty -- not financial advice.</p>
 
   {% if demo %}
   <div class="demo-banner">&#9888; Preview mode -- this is sample data, not live. Add your API keys and run <code>start.bat</code> for the real thing.</div>
@@ -373,7 +373,7 @@ async function refresh() {
 }
 
 refresh();
-setInterval(refresh, 5000);
+setInterval(refresh, 2000);
 </script>
 </body>
 </html>
