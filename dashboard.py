@@ -17,6 +17,7 @@ from flask import Flask, jsonify, render_template_string
 
 import db
 import correlate
+import graduation_watcher
 from config import MIN_MARKET_CAP_USD, HIGH_PRIORITY_VELOCITY_PCT, PRE_MARKET_WATCH_WINDOW_MIN
 
 app = Flask(__name__)
@@ -248,6 +249,7 @@ function renderPreMarketTable() {
       <td>${scoreBadge(r.score, r.band)}</td>
       <td>${r.pattern}</td>
       <td>${timeAgo(r.created_at)}</td>
+      <td class="num">${fmtUsd(r.market_cap_usd)}</td>
       <td class="num">${r.mention_count}${r.bot_mentions_excluded ? `<div class="bot-note">${r.bot_mentions_excluded} bot-like excluded</div>` : ''}</td>
       <td class="num">${r.distinct_authors}</td>
       <td>${timeAgo(r.first_mention_at)}</td>
@@ -263,7 +265,7 @@ function renderPreMarketTable() {
   wrap.innerHTML = `
     <table>
       <thead><tr>
-        <th>Token</th><th>Attention Score</th><th>Pattern</th><th>Created</th><th>Mentions</th><th>Authors</th><th>First Mention</th><th>Mint</th>
+        <th>Token</th><th>Attention Score</th><th>Pattern</th><th>Created</th><th>Market Cap</th><th>Mentions</th><th>Authors</th><th>First Mention</th><th>Mint</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
@@ -494,6 +496,11 @@ def api_data():
             "band": stats["band"],
             "pattern": stats["pattern"],
             "bot_mentions_excluded": stats["bot_mentions_excluded"],
+            # Pre-graduation tokens are still on the bonding curve, so these
+            # market caps are typically tiny (often well under $5K) -- that's
+            # expected, not a bug; MIN_MARKET_CAP_USD only filters graduated
+            # tokens, not this pre-market list.
+            "market_cap_usd": graduation_watcher._fetch_market_cap(t["mint"]),
         })
     pre_market_rows.sort(key=lambda r: r["score"], reverse=True)
 
