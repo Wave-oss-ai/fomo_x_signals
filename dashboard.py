@@ -173,6 +173,7 @@ PAGE = """
   <div class="tabs" id="view-tabs">
     <button class="tab active" data-view="graduated">Graduated</button>
     <button class="tab" data-view="premarket">&#128293; Pre-Market Hype</button>
+    <button class="tab" data-view="prelaunch">&#128302; Pre-Launch Chatter</button>
   </div>
 
   <div class="tabs" id="tabs">
@@ -229,8 +230,39 @@ window.copyMint = copyMint;
 
 let latestRows = [];
 let latestPreMarketRows = [];
+let latestPreLaunchRows = [];
 let activeFilter = 'all';
 let activeView = 'graduated';
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s || '';
+  return div.innerHTML;
+}
+
+function renderPreLaunchTable() {
+  const wrap = document.getElementById('table-wrap');
+
+  if (!latestPreLaunchRows.length) {
+    wrap.innerHTML = `<div class="empty">No pre-launch chatter matched yet -- watching X for phrases/accounts set in PRE_LAUNCH_KEYWORDS / PRE_LAUNCH_ACCOUNTS (config.py). Not tied to any specific token since none exists on-chain yet.</div>`;
+    return;
+  }
+
+  const rows = latestPreLaunchRows.map(r => `
+    <tr>
+      <td>@${escapeHtml(r.author || '?')}${r.likely_bot ? ' <span class="bot-note">(bot-like)</span>' : ''}</td>
+      <td>${escapeHtml(r.text)}</td>
+      <td>${timeAgo(r.posted_at)}</td>
+    </tr>
+  `).join('');
+
+  wrap.innerHTML = `
+    <table>
+      <thead><tr><th>Author</th><th>Post</th><th>Posted</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
 
 function renderPreMarketTable() {
   const wrap = document.getElementById('table-wrap');
@@ -275,6 +307,10 @@ function renderPreMarketTable() {
 function renderTable() {
   if (activeView === 'premarket') {
     renderPreMarketTable();
+    return;
+  }
+  if (activeView === 'prelaunch') {
+    renderPreLaunchTable();
     return;
   }
 
@@ -343,8 +379,9 @@ document.getElementById('view-tabs').addEventListener('click', (e) => {
   document.querySelectorAll('#view-tabs .tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
   activeView = btn.dataset.view;
-  document.getElementById('tabs').style.display = activeView === 'premarket' ? 'none' : 'flex';
-  document.getElementById('tab-note').style.display = activeView === 'premarket' ? 'none' : 'block';
+  const showFilterTabs = activeView === 'graduated';
+  document.getElementById('tabs').style.display = showFilterTabs ? 'flex' : 'none';
+  document.getElementById('tab-note').style.display = showFilterTabs ? 'block' : 'none';
   renderTable();
 });
 
@@ -365,10 +402,12 @@ async function refresh() {
     <div class="stat-tile"><div class="value">${data.stats.high_attention}</div><div class="label">High-attention alerts</div></div>
     <div class="stat-tile"><div class="value">${data.stats.high_priority}</div><div class="label">&#128293; High priority (big movers)</div></div>
     <div class="stat-tile"><div class="value">${data.stats.pre_market_hype}</div><div class="label">&#128293; Pre-market hype</div></div>
+    <div class="stat-tile"><div class="value">${data.stats.pre_launch_signals}</div><div class="label">&#128302; Pre-launch chatter</div></div>
   `;
 
   latestRows = data.rows;
   latestPreMarketRows = data.pre_market_rows || [];
+  latestPreLaunchRows = data.pre_launch_rows || [];
   renderTable();
 }
 
@@ -504,6 +543,11 @@ def api_data():
         })
     pre_market_rows.sort(key=lambda r: r["score"], reverse=True)
 
+    # Pre-launch: raw X chatter about tokens that haven't even launched
+    # on-chain yet (matched by keyword/account, not a mint -- none exists).
+    # Just the most recent signals, unscored, for a human to read.
+    pre_launch_rows = db.recent_pre_launch_signals(since_minutes=24 * 60)[:50]
+
     return jsonify({
         "stats": {
             "tracked": len(rows),
@@ -511,9 +555,11 @@ def api_data():
             "high_attention": high_attention,
             "high_priority": high_priority,
             "pre_market_hype": len(pre_market_rows),
+            "pre_launch_signals": len(pre_launch_rows),
         },
         "rows": rows,
         "pre_market_rows": pre_market_rows,
+        "pre_launch_rows": pre_launch_rows,
     })
 
 

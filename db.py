@@ -39,6 +39,18 @@ CREATE TABLE IF NOT EXISTS mentions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mentions_mint ON mentions(mint);
+
+CREATE TABLE IF NOT EXISTS pre_launch_signals (
+    tweet_id TEXT PRIMARY KEY,
+    author TEXT,
+    text TEXT,
+    posted_at REAL NOT NULL,
+    observed_at REAL NOT NULL,
+    matched_query TEXT,
+    author_followers INTEGER,
+    account_age_days REAL,
+    likely_bot INTEGER DEFAULT 0
+);
 """
 
 
@@ -147,6 +159,39 @@ def mention_exists(tweet_id):
     with get_conn() as conn:
         row = conn.execute("SELECT 1 FROM mentions WHERE tweet_id = ?", (tweet_id,)).fetchone()
         return row is not None
+
+
+def pre_launch_signal_exists(tweet_id):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM pre_launch_signals WHERE tweet_id = ?", (tweet_id,)
+        ).fetchone()
+        return row is not None
+
+
+def record_pre_launch_signal(tweet_id, author, text, posted_at, matched_query, observed_at=None,
+                              author_followers=None, account_age_days=None, likely_bot=False):
+    observed_at = observed_at or time.time()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO pre_launch_signals
+               (tweet_id, author, text, posted_at, observed_at, matched_query,
+                author_followers, account_age_days, likely_bot)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(tweet_id) DO NOTHING""",
+            (tweet_id, author, text, posted_at, observed_at, matched_query,
+             author_followers, account_age_days, int(bool(likely_bot))),
+        )
+
+
+def recent_pre_launch_signals(since_minutes):
+    with get_conn() as conn:
+        cutoff = time.time() - since_minutes * 60
+        rows = conn.execute(
+            "SELECT * FROM pre_launch_signals WHERE posted_at >= ? ORDER BY posted_at DESC",
+            (cutoff,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def mentions_for(mint):

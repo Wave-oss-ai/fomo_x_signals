@@ -73,7 +73,7 @@ import db  # noqa: E402
 import graduation_watcher  # noqa: E402
 import twitter_scanner  # noqa: E402
 from dashboard import app as flask_app  # noqa: E402
-from config import ATTENTION_MENTION_THRESHOLD, ENABLE_PRE_MARKET_SCAN  # noqa: E402
+from config import ATTENTION_MENTION_THRESHOLD, ENABLE_PRE_MARKET_SCAN, ENABLE_PRE_LAUNCH_SCAN  # noqa: E402
 
 _alerted = set()
 
@@ -106,6 +106,14 @@ def run_pre_market_scanner():
     twitter_scanner.run_forever_new_tokens(on_mentions=on_pre_market_mentions)
 
 
+def on_pre_launch_signal(new_count):
+    print(f"[pre-launch] +{new_count} new pre-launch signal(s) found")
+
+
+def run_pre_launch_scanner():
+    twitter_scanner.run_forever_pre_launch(on_signal=on_pre_launch_signal)
+
+
 def run_dashboard():
     flask_app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
 
@@ -124,6 +132,10 @@ def main():
         threading.Thread(target=run_pre_market_scanner, daemon=True).start()
     else:
         print("[pre-market] disabled -- set ENABLE_PRE_MARKET_SCAN=1 to turn on pre-graduation X hype scanning")
+    if ENABLE_PRE_LAUNCH_SCAN:
+        threading.Thread(target=run_pre_launch_scanner, daemon=True).start()
+    else:
+        print("[pre-launch] disabled -- set ENABLE_PRE_LAUNCH_SCAN=1 to turn on pre-launch chatter scanning")
     threading.Thread(target=run_dashboard, daemon=True).start()
 
     if not IS_HOSTED:

@@ -60,3 +60,26 @@ WATCH_ACCOUNTS = [
 WATCH_KEYWORDS = [
     # "gem",
 ]
+
+# Pre-launch chatter: tokens don't have a mint/contract address until they're
+# actually created on-chain, so this can't search by symbol -- it searches
+# X purely for phrases/accounts that tend to precede a launch. A separate
+# list from WATCH_KEYWORDS/WATCH_ACCOUNTS above so these phrases don't also
+# get mixed into every graduated-token search (that would just add noise
+# there). Edit freely -- these are a reasonable starting set.
+PRE_LAUNCH_KEYWORDS = [
+    "stealth launch",
+    "launching soon",
+    "CA soon",
+    "fair launch",
+    "dropping soon",
+]
+PRE_LAUNCH_ACCOUNTS = [
+    # "someKOLhandle",
+]
+
+# Off by default -- this is a THIRD X polling stream on top of graduated
+# mentions and pre-market hype, so it stacks more spend on top of both.
+# Set to "1" (as an env var/Secret) once you're ready to pay for it.
+ENABLE_PRE_LAUNCH_SCAN = os.getenv("ENABLE_PRE_LAUNCH_SCAN") == "1"
+PRE_LAUNCH_POLL_INTERVAL_SEC = int(os.getenv("PRE_LAUNCH_POLL_INTERVAL_SEC", "300"))

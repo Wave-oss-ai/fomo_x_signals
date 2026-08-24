@@ -29,6 +29,9 @@ from config import (
     WATCH_KEYWORDS,
     PRE_MARKET_WATCH_WINDOW_MIN,
     PRE_MARKET_POLL_INTERVAL_SEC,
+    PRE_LAUNCH_KEYWORDS,
+    PRE_LAUNCH_ACCOUNTS,
+    PRE_LAUNCH_POLL_INTERVAL_SEC,
 )
 
 SEARCH_URL = "https://api.x.com/2/tweets/search/recent"
@@ -250,6 +253,80 @@ def run_forever_new_tokens(on_mentions=None):
     while True:
         poll_new_tokens_once(on_mentions=on_mentions)
         time.sleep(PRE_MARKET_POLL_INTERVAL_SEC)
+
+
+def build_pre_launch_query():
+    """Unlike build_query(), there's no mint/symbol to search by here --
+    a token that hasn't launched on-chain yet doesn't have a contract
+    address. This searches purely by the phrases/accounts in
+    PRE_LAUNCH_KEYWORDS / PRE_LAUNCH_ACCOUNTS. Returns None if neither is
+    configured, since an empty search isn't meaningful."""
+    if not PRE_LAUNCH_KEYWORDS and not PRE_LAUNCH_ACCOUNTS:
+        return None
+    terms = [f'"{kw}"' if " " in kw else kw for kw in PRE_LAUNCH_KEYWORDS]
+    query = " OR ".join(terms)
+    if PRE_LAUNCH_ACCOUNTS:
+        accounts = " OR ".join(f"from:{a}" for a in PRE_LAUNCH_ACCOUNTS)
+        query = f"({query}) OR ({accounts})" if query else f"({accounts})"
+    return f"({query}) -is:retweet"
+
+
+def poll_pre_launch_once(on_signal=None):
+    """Sweeps X once for pre-launch chatter -- tweets about a token that's
+    about to launch/hasn't hit the chain yet. Not tied to any mint, so these
+    just get stored as raw signals for a human to read, not correlated into
+    an attention score like graduated/pre-market tokens are."""
+    query = build_pre_launch_query()
+    if not query:
+        return
+
+    try:
+        tweets, users = search_recent(query)
+    except Exception as e:
+        print(f"[twitter_scanner] pre-launch search failed: {e}")
+        return
+
+    new_count = 0
+    for tw in tweets:
+        if db.pre_launch_signal_exists(tw["id"]):
+            continue
+        try:
+            posted_at = _to_epoch(tw["created_at"])
+        except Exception:
+            posted_at = time.time()
+
+        user = users.get(tw.get("author_id"))
+        followers = None
+        account_age_days = None
+        if user:
+            followers = (user.get("public_metrics") or {}).get("followers_count")
+            created_at = user.get("created_at")
+            if created_at:
+                try:
+                    account_age_days = (time.time() - _to_epoch(created_at)) / 86400
+                except Exception:
+                    account_age_days = None
+
+        db.record_pre_launch_signal(
+            tweet_id=tw["id"],
+            author=user.get("username") if user else tw.get("author_id"),
+            text=tw.get("text", ""),
+            posted_at=posted_at,
+            matched_query=query,
+            author_followers=followers,
+            account_age_days=account_age_days,
+            likely_bot=looks_like_bot(user),
+        )
+        new_count += 1
+
+    if new_count and on_signal:
+        on_signal(new_count)
+
+
+def run_forever_pre_launch(on_signal=None):
+    while True:
+        poll_pre_launch_once(on_signal=on_signal)
+        time.sleep(PRE_LAUNCH_POLL_INTERVAL_SEC)
 
 
 if __name__ == "__main__":
