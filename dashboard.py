@@ -23,6 +23,23 @@ from config import MIN_MARKET_CAP_USD, HIGH_PRIORITY_VELOCITY_PCT, PRE_MARKET_WA
 app = Flask(__name__)
 DEMO_MODE = os.environ.get("FOMO_DEMO_MODE") == "1"
 
+
+def recent_mentions(mint, limit=12):
+    """The actual X posts behind a token's Attention Score, newest first --
+    lets you sanity-check the score instead of just trusting a number."""
+    mentions = db.mentions_for(mint)
+    mentions = sorted(mentions, key=lambda m: m["posted_at"], reverse=True)[:limit]
+    return [
+        {
+            "author": m["author"],
+            "text": m["text"],
+            "posted_at": m["posted_at"],
+            "tweet_id": m["tweet_id"],
+            "likely_bot": bool(m["likely_bot"]),
+        }
+        for m in mentions
+    ]
+
 PAGE = """
 <!doctype html>
 <html lang="en">
@@ -158,6 +175,56 @@ PAGE = """
     border-radius: 8px; padding: 10px 14px; font-size: 13px; font-weight: 500;
     margin-bottom: 20px;
   }
+
+  .controls-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; margin-bottom: 10px; flex-wrap: wrap;
+  }
+  .search-input {
+    font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text-primary); min-width: 240px;
+  }
+  .search-input:focus { outline: none; border-color: var(--series-1); }
+  .search-input::placeholder { color: var(--muted); }
+  .last-updated { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+  .token-cell { display: flex; align-items: center; gap: 8px; }
+  .token-avatar {
+    width: 28px; height: 28px; border-radius: 50%; object-fit: cover;
+    flex-shrink: 0; background: var(--grid); border: 1px solid var(--border);
+  }
+  .token-avatar.placeholder {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600; color: var(--muted);
+  }
+
+  .token-links { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+  .token-links a {
+    font-size: 10px; color: var(--muted); text-decoration: none;
+    border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px;
+  }
+  .token-links a:hover { color: var(--series-1); border-color: var(--series-1); }
+
+  th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+  th.sortable:hover { color: var(--text-primary); }
+  th.sortable .arrow { opacity: 0.45; margin-left: 3px; font-size: 9px; }
+  th.sortable.active .arrow { opacity: 1; color: var(--series-1); }
+
+  tr.token-row { cursor: pointer; }
+  tr.token-row:hover td { background: var(--page); }
+  tr.detail-row td { background: var(--page); padding: 0; }
+  .detail-panel { padding: 10px 16px; max-height: 260px; overflow-y: auto; }
+  .detail-empty { color: var(--muted); font-size: 12px; padding: 6px 0; }
+  .mention-item { padding: 7px 0; border-bottom: 1px solid var(--grid); font-size: 12px; }
+  .mention-item:last-child { border-bottom: none; }
+  .mention-head {
+    display: flex; gap: 8px; align-items: baseline; color: var(--muted);
+    font-size: 11px; margin-bottom: 2px; flex-wrap: wrap;
+  }
+  .mention-head a { color: var(--series-1); text-decoration: none; }
+  .mention-head a:hover { text-decoration: underline; }
+  .mention-text { color: var(--text-primary); }
 </style>
 </head>
 <body>
@@ -169,6 +236,11 @@ PAGE = """
   {% endif %}
 
   <div class="stats" id="stats"></div>
+
+  <div class="controls-row">
+    <input id="search-input" class="search-input" type="text" placeholder="Search name, symbol, or mint...">
+    <span class="last-updated" id="last-updated"></span>
+  </div>
 
   <div class="tabs" id="view-tabs">
     <button class="tab active" data-view="graduated">Graduated</button>
@@ -233,12 +305,109 @@ let latestPreMarketRows = [];
 let latestPreLaunchRows = [];
 let activeFilter = 'all';
 let activeView = 'graduated';
+let searchQuery = '';
+let sortKey = null;
+let sortDir = 'desc';
+let expandedMints = new Set();
+let lastUpdated = null;
 
 function escapeHtml(s) {
   const div = document.createElement('div');
   div.textContent = s || '';
   return div.innerHTML;
 }
+
+function avatarFallback(img, label) {
+  const div = document.createElement('div');
+  div.className = 'token-avatar placeholder';
+  div.textContent = label;
+  img.replaceWith(div);
+}
+window.avatarFallback = avatarFallback;
+
+function tokenAvatar(r) {
+  const label = escapeHtml((r.symbol || r.name || '?').charAt(0).toUpperCase());
+  if (!r.image_uri) return `<div class="token-avatar placeholder">${label}</div>`;
+  return `<img class="token-avatar" src="${escapeHtml(r.image_uri)}" alt="" loading="lazy" onerror="avatarFallback(this,'${label}')">`;
+}
+
+function externalLinks(mint, symbol) {
+  const q = encodeURIComponent(symbol ? '$' + symbol : mint);
+  return `<div class="token-links" onclick="event.stopPropagation()">
+    <a href="https://pump.fun/coin/${mint}" target="_blank" rel="noopener">pump.fun</a>
+    <a href="https://dexscreener.com/solana/${mint}" target="_blank" rel="noopener">chart</a>
+    <a href="https://solscan.io/token/${mint}" target="_blank" rel="noopener">solscan</a>
+    <a href="https://x.com/search?q=${q}&src=typed_query" target="_blank" rel="noopener">X search</a>
+  </div>`;
+}
+
+function sortableTh(label, key) {
+  const active = sortKey === key;
+  const arrow = active ? (sortDir === 'asc' ? '&#9650;' : '&#9660;') : '&#8597;';
+  return `<th class="sortable ${active ? 'active' : ''}" onclick="onSortClick('${key}')">${label} <span class="arrow">${arrow}</span></th>`;
+}
+
+function onSortClick(key) {
+  if (sortKey === key) {
+    sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortKey = key;
+    sortDir = 'desc';
+  }
+  renderTable();
+}
+window.onSortClick = onSortClick;
+
+function applySort(rows) {
+  if (!sortKey) return rows;
+  return [...rows].sort((a, b) => {
+    let av = a[sortKey], bv = b[sortKey];
+    if (av === null || av === undefined) av = -Infinity;
+    if (bv === null || bv === undefined) bv = -Infinity;
+    if (av < bv) return sortDir === 'asc' ? -1 : 1;
+    if (av > bv) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+}
+
+function matchesSearch(r) {
+  if (!searchQuery) return true;
+  const hay = [r.name, r.symbol, r.mint, r.author, r.text].filter(Boolean).join(' ').toLowerCase();
+  return hay.includes(searchQuery);
+}
+
+function toggleExpand(mint) {
+  if (expandedMints.has(mint)) expandedMints.delete(mint); else expandedMints.add(mint);
+  renderTable();
+}
+window.toggleExpand = toggleExpand;
+
+function renderDetailPanel(r) {
+  const mentions = r.mentions || [];
+  if (!mentions.length) {
+    return `<div class="detail-panel"><div class="detail-empty">No individual X mentions stored for this token yet -- the Attention Score above is 0 or based on data that's since aged out.</div></div>`;
+  }
+  const items = mentions.map(m => `
+    <div class="mention-item">
+      <div class="mention-head">
+        <span>@${escapeHtml(m.author || '?')}</span>
+        ${m.likely_bot ? '<span class="bot-note">(bot-like, excluded from score)</span>' : ''}
+        <span>${timeAgo(m.posted_at)}</span>
+        ${m.tweet_id ? `<a href="https://x.com/i/status/${m.tweet_id}" target="_blank" rel="noopener">view post &#8599;</a>` : ''}
+      </div>
+      <div class="mention-text">${escapeHtml(m.text)}</div>
+    </div>
+  `).join('');
+  return `<div class="detail-panel">${items}</div>`;
+}
+
+function updateLastUpdatedText() {
+  const el = document.getElementById('last-updated');
+  if (!el || !lastUpdated) return;
+  const secs = Math.round((Date.now() - lastUpdated) / 1000);
+  el.textContent = secs <= 1 ? 'Updated just now' : `Updated ${secs}s ago`;
+}
+setInterval(updateLastUpdatedText, 1000);
 
 function renderPreLaunchTable() {
   const wrap = document.getElementById('table-wrap');
@@ -248,7 +417,13 @@ function renderPreLaunchTable() {
     return;
   }
 
-  const rows = latestPreLaunchRows.map(r => `
+  const filtered = latestPreLaunchRows.filter(matchesSearch);
+  if (!filtered.length) {
+    wrap.innerHTML = `<div class="empty">No pre-launch chatter matches your search.</div>`;
+    return;
+  }
+
+  const rows = filtered.map(r => `
     <tr>
       <td>@${escapeHtml(r.author || '?')}${r.likely_bot ? ' <span class="bot-note">(bot-like)</span>' : ''}</td>
       <td>${escapeHtml(r.text)}</td>
@@ -272,11 +447,24 @@ function renderPreMarketTable() {
     return;
   }
 
-  const rows = latestPreMarketRows.map(r => `
-    <tr>
+  const filtered = applySort(latestPreMarketRows.filter(matchesSearch));
+  if (!filtered.length) {
+    wrap.innerHTML = `<div class="empty">Nothing matches your search.</div>`;
+    return;
+  }
+
+  const rows = filtered.map(r => {
+    const isOpen = expandedMints.has(r.mint);
+    const mainRow = `
+    <tr class="token-row" onclick="toggleExpand('${r.mint}')">
       <td>
-        <div class="token-name">${r.name || r.symbol || '?'}</div>
-        <div class="token-symbol">${r.symbol ? '$' + r.symbol : ''}</div>
+        <div class="token-cell">
+          ${tokenAvatar(r)}
+          <div>
+            <div class="token-name">${escapeHtml(r.name || r.symbol || '?')}</div>
+            <div class="token-symbol">${r.symbol ? '$' + escapeHtml(r.symbol) : ''}</div>
+          </div>
+        </div>
       </td>
       <td>${scoreBadge(r.score, r.band)}</td>
       <td>${r.pattern}</td>
@@ -288,16 +476,19 @@ function renderPreMarketTable() {
       <td class="mint">
         <div class="mint-cell">
           <span>${r.mint}</span>
-          <button class="copy-btn" onclick="copyMint('${r.mint}', this)">Copy</button>
+          <button class="copy-btn" onclick="event.stopPropagation(); copyMint('${r.mint}', this)">Copy</button>
         </div>
+        ${externalLinks(r.mint, r.symbol)}
       </td>
-    </tr>
-  `).join('');
+    </tr>`;
+    const detailRow = isOpen ? `<tr class="detail-row"><td colspan="9">${renderDetailPanel(r)}</td></tr>` : '';
+    return mainRow + detailRow;
+  }).join('');
 
   wrap.innerHTML = `
     <table>
       <thead><tr>
-        <th>Token</th><th>Attention Score</th><th>Pattern</th><th>Created</th><th>Market Cap</th><th>Mentions</th><th>Authors</th><th>First Mention</th><th>Mint</th>
+        <th>Token</th>${sortableTh('Attention Score', 'score')}<th>Pattern</th>${sortableTh('Created', 'created_at')}${sortableTh('Market Cap', 'market_cap_usd')}${sortableTh('Mentions', 'mention_count')}${sortableTh('Authors', 'distinct_authors')}${sortableTh('First Mention', 'first_mention_at')}<th>Mint</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
@@ -321,20 +512,28 @@ function renderTable() {
     return;
   }
 
-  const filtered = activeFilter === 'all'
+  let filtered = activeFilter === 'all'
     ? latestRows
     : latestRows.filter(r => r.pattern === activeFilter);
+  filtered = applySort(filtered.filter(matchesSearch));
 
   if (!filtered.length) {
-    wrap.innerHTML = `<div class="empty">Nothing in this category yet.</div>`;
+    wrap.innerHTML = `<div class="empty">Nothing matches the current tab/search.</div>`;
     return;
   }
 
-  const rows = filtered.map((r, i) => `
-    <tr class="${r.is_high_priority ? 'high-priority' : ''}">
+  const rows = filtered.map(r => {
+    const isOpen = expandedMints.has(r.mint);
+    const mainRow = `
+    <tr class="token-row ${r.is_high_priority ? 'high-priority' : ''}" onclick="toggleExpand('${r.mint}')">
       <td>
-        <div class="token-name">${r.is_high_priority ? '&#128293; ' : ''}${r.name || r.symbol || '?'}</div>
-        <div class="token-symbol">${r.symbol ? '$' + r.symbol : ''}</div>
+        <div class="token-cell">
+          ${tokenAvatar(r)}
+          <div>
+            <div class="token-name">${r.is_high_priority ? '&#128293; ' : ''}${escapeHtml(r.name || r.symbol || '?')}</div>
+            <div class="token-symbol">${r.symbol ? '$' + escapeHtml(r.symbol) : ''}</div>
+          </div>
+        </div>
       </td>
       <td>${scoreBadge(r.score, r.band)}</td>
       <td>${r.pattern}</td>
@@ -348,16 +547,19 @@ function renderTable() {
       <td class="mint">
         <div class="mint-cell">
           <span>${r.mint}</span>
-          <button class="copy-btn" onclick="copyMint('${r.mint}', this)">Copy</button>
+          <button class="copy-btn" onclick="event.stopPropagation(); copyMint('${r.mint}', this)">Copy</button>
         </div>
+        ${externalLinks(r.mint, r.symbol)}
       </td>
-    </tr>
-  `).join('');
+    </tr>`;
+    const detailRow = isOpen ? `<tr class="detail-row"><td colspan="11">${renderDetailPanel(r)}</td></tr>` : '';
+    return mainRow + detailRow;
+  }).join('');
 
   wrap.innerHTML = `
     <table>
       <thead><tr>
-        <th>Token</th><th>Attention Score</th><th>Pattern</th><th>Graduated</th><th>Market Cap</th><th>% Since Grad</th><th>Mentions</th><th>Authors</th><th>First Mention</th><th>Lead / Lag</th><th>Mint</th>
+        <th>Token</th>${sortableTh('Attention Score', 'score')}<th>Pattern</th>${sortableTh('Graduated', 'graduated_at')}${sortableTh('Market Cap', 'market_cap_usd')}${sortableTh('% Since Grad', 'pct_change')}${sortableTh('Mentions', 'mention_count')}${sortableTh('Authors', 'distinct_authors')}${sortableTh('First Mention', 'first_mention_at')}${sortableTh('Lead / Lag', 'lead_seconds')}<th>Mint</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
@@ -379,9 +581,15 @@ document.getElementById('view-tabs').addEventListener('click', (e) => {
   document.querySelectorAll('#view-tabs .tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
   activeView = btn.dataset.view;
+  sortKey = null;
   const showFilterTabs = activeView === 'graduated';
   document.getElementById('tabs').style.display = showFilterTabs ? 'flex' : 'none';
   document.getElementById('tab-note').style.display = showFilterTabs ? 'block' : 'none';
+  renderTable();
+});
+
+document.getElementById('search-input').addEventListener('input', (e) => {
+  searchQuery = e.target.value.trim().toLowerCase();
   renderTable();
 });
 
@@ -395,6 +603,9 @@ async function refresh() {
       `<div class="empty">Couldn't reach the dashboard API -- is dashboard.py still running?</div>`;
     return;
   }
+
+  lastUpdated = Date.now();
+  updateLastUpdatedText();
 
   document.getElementById('stats').innerHTML = `
     <div class="stat-tile"><div class="value">${data.stats.tracked}</div><div class="label">Graduations tracked</div></div>
@@ -452,6 +663,7 @@ def api_data():
             "symbol": g["symbol"],
             "name": g["name"],
             "mint": g["mint"],
+            "image_uri": g["image_uri"],
             "graduated_at": g["graduated_at"],
             "mention_count": stats["count"],
             "distinct_authors": stats["distinct_authors"],
@@ -466,6 +678,7 @@ def api_data():
             "pct_change": pct_change,
             "recent_velocity_pct": g["recent_velocity_pct"],
             "is_high_priority": g["recent_velocity_pct"] is not None and g["recent_velocity_pct"] >= HIGH_PRIORITY_VELOCITY_PCT,
+            "mentions": recent_mentions(g["mint"]),
         })
 
     # pump.fun lets anyone reuse a popular name AND/OR ticker for a
@@ -523,10 +736,17 @@ def api_data():
         stats = correlate.attention_score(t["mint"])
         if stats["count"] == 0:
             continue
+        # Fetch once, reuse for both market cap and logo; cache the image
+        # once we have it so we don't keep re-requesting it every refresh.
+        _, _, market_cap_usd, image_uri = graduation_watcher._fetch_metadata(t["mint"])
+        image_uri = t["image_uri"] or image_uri
+        if image_uri and not t["image_uri"]:
+            db.update_new_token_image(t["mint"], image_uri)
         pre_market_rows.append({
             "symbol": t["symbol"],
             "name": t["name"],
             "mint": t["mint"],
+            "image_uri": image_uri,
             "created_at": t["created_at"],
             "mention_count": stats["count"],
             "distinct_authors": stats["distinct_authors"],
@@ -539,7 +759,8 @@ def api_data():
             # market caps are typically tiny (often well under $5K) -- that's
             # expected, not a bug; MIN_MARKET_CAP_USD only filters graduated
             # tokens, not this pre-market list.
-            "market_cap_usd": graduation_watcher._fetch_market_cap(t["mint"]),
+            "market_cap_usd": market_cap_usd,
+            "mentions": recent_mentions(t["mint"]),
         })
     pre_market_rows.sort(key=lambda r: r["score"], reverse=True)
 

@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS graduations (
     raw_json TEXT,
     market_cap_usd REAL,             -- most recently refreshed market cap
     graduation_market_cap_usd REAL,  -- market cap at the moment we saw it graduate
-    recent_velocity_pct REAL         -- % change between the last two refreshes (is it moving *right now*)
+    recent_velocity_pct REAL,        -- % change between the last two refreshes (is it moving *right now*)
+    image_uri TEXT                   -- token logo, from pump.fun's coin API
 );
 
 CREATE TABLE IF NOT EXISTS new_tokens (
@@ -22,7 +23,8 @@ CREATE TABLE IF NOT EXISTS new_tokens (
     symbol TEXT,
     name TEXT,
     created_at REAL NOT NULL,
-    raw_json TEXT
+    raw_json TEXT,
+    image_uri TEXT
 );
 
 CREATE TABLE IF NOT EXISTS mentions (
@@ -68,46 +70,64 @@ def get_conn():
 def init_db():
     with get_conn() as conn:
         conn.executescript(SCHEMA)
-        # Migration for DBs created before market cap tracking was added.
-        for column in ("market_cap_usd", "graduation_market_cap_usd", "recent_velocity_pct"):
+        # Migration for DBs created before market cap / image tracking was added.
+        for column, coltype in (
+            ("market_cap_usd", "REAL"), ("graduation_market_cap_usd", "REAL"),
+            ("recent_velocity_pct", "REAL"), ("image_uri", "TEXT"),
+        ):
             try:
-                conn.execute(f"ALTER TABLE graduations ADD COLUMN {column} REAL")
+                conn.execute(f"ALTER TABLE graduations ADD COLUMN {column} {coltype}")
             except sqlite3.OperationalError:
                 pass  # column already exists
+        try:
+            conn.execute("ALTER TABLE new_tokens ADD COLUMN image_uri TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
-def record_graduation(mint, symbol, name, raw_json, when=None, market_cap_usd=None):
+def record_graduation(mint, symbol, name, raw_json, when=None, market_cap_usd=None, image_uri=None):
     when = when or time.time()
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO graduations
-               (mint, symbol, name, graduated_at, raw_json, market_cap_usd, graduation_market_cap_usd)
-               VALUES (?, ?, ?, ?, ?, ?, ?)
+               (mint, symbol, name, graduated_at, raw_json, market_cap_usd, graduation_market_cap_usd, image_uri)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(mint) DO NOTHING""",
-            (mint, symbol, name, when, raw_json, market_cap_usd, market_cap_usd),
+            (mint, symbol, name, when, raw_json, market_cap_usd, market_cap_usd, image_uri),
         )
 
 
-def update_market_cap(mint, market_cap_usd, recent_velocity_pct=None):
+def update_market_cap(mint, market_cap_usd, recent_velocity_pct=None, image_uri=None):
     with get_conn() as conn:
         conn.execute(
             """UPDATE graduations
                SET market_cap_usd = ?,
                    graduation_market_cap_usd = COALESCE(graduation_market_cap_usd, ?),
-                   recent_velocity_pct = ?
+                   recent_velocity_pct = ?,
+                   image_uri = COALESCE(?, image_uri)
                WHERE mint = ?""",
-            (market_cap_usd, market_cap_usd, recent_velocity_pct, mint),
+            (market_cap_usd, market_cap_usd, recent_velocity_pct, image_uri, mint),
         )
 
 
-def record_new_token(mint, symbol, name, raw_json, when=None):
+def record_new_token(mint, symbol, name, raw_json, when=None, image_uri=None):
     when = when or time.time()
     with get_conn() as conn:
         conn.execute(
-            """INSERT INTO new_tokens (mint, symbol, name, created_at, raw_json)
-               VALUES (?, ?, ?, ?, ?)
+            """INSERT INTO new_tokens (mint, symbol, name, created_at, raw_json, image_uri)
+               VALUES (?, ?, ?, ?, ?, ?)
                ON CONFLICT(mint) DO NOTHING""",
-            (mint, symbol, name, when, raw_json),
+            (mint, symbol, name, when, raw_json, image_uri),
+        )
+
+
+def update_new_token_image(mint, image_uri):
+    if not image_uri:
+        return
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE new_tokens SET image_uri = COALESCE(image_uri, ?) WHERE mint = ?",
+            (image_uri, mint),
         )
 
 

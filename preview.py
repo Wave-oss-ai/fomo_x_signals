@@ -71,8 +71,19 @@ def seed_demo_data():
         ]),
     ]
 
-    for mint, symbol, name, grad_ago, mentions in tokens:
-        db.record_graduation(mint, symbol, name, "{}", when=now - grad_ago)
+    # Simple colored-circle "logos" (inline SVG data URIs) so the preview
+    # demonstrates the token-avatar UI without depending on any real image host.
+    colors = ["#5b8def", "#e0653a", "#3aa66b", "#c25ad1"]
+    for idx, (mint, symbol, name, grad_ago, mentions) in enumerate(tokens):
+        svg = (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">'
+            f'<circle cx="32" cy="32" r="32" fill="{colors[idx % len(colors)]}"/>'
+            f'<text x="32" y="40" font-size="26" text-anchor="middle" fill="white" '
+            f'font-family="sans-serif">{symbol[0]}</text></svg>'
+        )
+        import urllib.parse
+        image_uri = "data:image/svg+xml," + urllib.parse.quote(svg)
+        db.record_graduation(mint, symbol, name, "{}", when=now - grad_ago, image_uri=image_uri)
         for i, mention in enumerate(mentions):
             # Most entries are (ago, author, text); a few carry a trailing
             # True to simulate a bot-shaped account for the preview.

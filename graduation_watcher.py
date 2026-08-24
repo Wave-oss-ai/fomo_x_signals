@@ -34,10 +34,10 @@ def _extract(event: dict, *keys, default=None):
 
 
 def _fetch_metadata(mint):
-    """PumpPortal's migration event doesn't include the token's name/symbol
-    or market cap, so look them up from pump.fun's own public coin API as a
-    fallback. Best effort only -- any failure just leaves the fields blank
-    rather than holding up the watcher loop."""
+    """PumpPortal's migration event doesn't include the token's name/symbol,
+    market cap, or logo, so look them up from pump.fun's own public coin API
+    as a fallback. Best effort only -- any failure just leaves the fields
+    blank rather than holding up the watcher loop."""
     try:
         resp = requests.get(
             f"https://frontend-api-v3.pump.fun/coins/{mint}",
@@ -46,13 +46,13 @@ def _fetch_metadata(mint):
         )
         resp.raise_for_status()
         data = resp.json()
-        return data.get("symbol"), data.get("name"), data.get("usd_market_cap")
+        return data.get("symbol"), data.get("name"), data.get("usd_market_cap"), data.get("image_uri")
     except Exception:
-        return None, None, None
+        return None, None, None, None
 
 
 def _fetch_market_cap(mint):
-    _, _, market_cap_usd = _fetch_metadata(mint)
+    _, _, market_cap_usd, _ = _fetch_metadata(mint)
     return market_cap_usd
 
 
@@ -63,14 +63,14 @@ async def refresh_market_caps(interval_sec=MARKET_CAP_REFRESH_SEC):
     catches a push while it's happening, rather than only after the fact."""
     while True:
         for g in db.recent_graduations():
-            market_cap_usd = await asyncio.to_thread(_fetch_market_cap, g["mint"])
+            _, _, market_cap_usd, image_uri = await asyncio.to_thread(_fetch_metadata, g["mint"])
             if market_cap_usd is None:
                 continue
             previous = g["market_cap_usd"]
             recent_velocity_pct = None
             if previous:
                 recent_velocity_pct = (market_cap_usd - previous) / previous * 100
-            db.update_market_cap(g["mint"], market_cap_usd, recent_velocity_pct)
+            db.update_market_cap(g["mint"], market_cap_usd, recent_velocity_pct, image_uri=image_uri)
         await asyncio.sleep(interval_sec)
 
 
@@ -106,10 +106,10 @@ async def watch(on_graduation=None, on_new_token=None, reconnect_delay=5):
                     is_migration = "migrat" in kind or "graduat" in kind or event.get("pool") == "pump-amm"
 
                     if is_migration:
-                        fetched_symbol, fetched_name, market_cap_usd = await asyncio.to_thread(_fetch_metadata, mint)
+                        fetched_symbol, fetched_name, market_cap_usd, image_uri = await asyncio.to_thread(_fetch_metadata, mint)
                         symbol = symbol or fetched_symbol
                         name = name or fetched_name
-                        db.record_graduation(mint, symbol, name, raw, when=now, market_cap_usd=market_cap_usd)
+                        db.record_graduation(mint, symbol, name, raw, when=now, market_cap_usd=market_cap_usd, image_uri=image_uri)
                         record = {"mint": mint, "symbol": symbol, "name": name, "graduated_at": now}
                         print(f"[graduation] {symbol or mint} graduated at {time.strftime('%H:%M:%S', time.localtime(now))}")
                         if on_graduation:
