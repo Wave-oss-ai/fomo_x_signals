@@ -31,6 +31,14 @@ HIGH_PRIORITY_VELOCITY_PCT = int(os.getenv("HIGH_PRIORITY_VELOCITY_PCT", "20"))
 
 DB_PATH = os.getenv("DB_PATH", "signals.db")
 
+# "Proven Creator" = this wallet has launched at least MIN_CREATOR_COINS
+# coins before, and MOST of them (> this fraction) actually graduated.
+# Requiring a minimum sample size stops a single lucky 1-for-1 launch from
+# counting as a track record. Still just a heuristic on past behavior, not
+# a guarantee this creator's next coin succeeds too.
+CREATOR_SUCCESS_RATE = float(os.getenv("CREATOR_SUCCESS_RATE", "0.5"))
+MIN_CREATOR_COINS = int(os.getenv("MIN_CREATOR_COINS", "2"))
+
 # How often (seconds) to re-check each tracked token's market cap. Free
 # (pump.fun's own public API, no billing), so this can run tight without
 # adding to X API spend.

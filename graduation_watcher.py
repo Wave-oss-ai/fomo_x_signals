@@ -35,9 +35,9 @@ def _extract(event: dict, *keys, default=None):
 
 def _fetch_metadata(mint):
     """PumpPortal's migration event doesn't include the token's name/symbol,
-    market cap, or logo, so look them up from pump.fun's own public coin API
-    as a fallback. Best effort only -- any failure just leaves the fields
-    blank rather than holding up the watcher loop."""
+    market cap, logo, or creator wallet, so look them up from pump.fun's own
+    public coin API as a fallback. Best effort only -- any failure just
+    leaves the fields blank rather than holding up the watcher loop."""
     try:
         resp = requests.get(
             f"https://frontend-api-v3.pump.fun/coins/{mint}",
@@ -46,14 +46,43 @@ def _fetch_metadata(mint):
         )
         resp.raise_for_status()
         data = resp.json()
-        return data.get("symbol"), data.get("name"), data.get("usd_market_cap"), data.get("image_uri")
+        return (
+            data.get("symbol"), data.get("name"), data.get("usd_market_cap"),
+            data.get("image_uri"), data.get("creator"),
+        )
     except Exception:
-        return None, None, None, None
+        return None, None, None, None, None
 
 
 def _fetch_market_cap(mint):
-    _, _, market_cap_usd, _ = _fetch_metadata(mint)
+    _, _, market_cap_usd, _, _ = _fetch_metadata(mint)
     return market_cap_usd
+
+
+def fetch_creator_track_record(creator):
+    """How many coins has this wallet launched before, and how many of
+    those actually graduated ("complete": true means it crossed the
+    bonding-curve threshold and moved to a real DEX -- the same bar this
+    whole app tracks)? Best effort: any failure returns (0, 0), which reads
+    as "no track record" rather than crashing anything."""
+    if not creator:
+        return 0, 0
+    try:
+        resp = requests.get(
+            "https://frontend-api-v3.pump.fun/coins",
+            params={"creator": creator, "limit": 100},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        coins = resp.json()
+        if not isinstance(coins, list):
+            return 0, 0
+        total = len(coins)
+        graduated = sum(1 for c in coins if c.get("complete"))
+        return total, graduated
+    except Exception:
+        return 0, 0
 
 
 async def refresh_market_caps(interval_sec=MARKET_CAP_REFRESH_SEC):
@@ -63,7 +92,7 @@ async def refresh_market_caps(interval_sec=MARKET_CAP_REFRESH_SEC):
     catches a push while it's happening, rather than only after the fact."""
     while True:
         for g in db.recent_graduations():
-            _, _, market_cap_usd, image_uri = await asyncio.to_thread(_fetch_metadata, g["mint"])
+            _, _, market_cap_usd, image_uri, _ = await asyncio.to_thread(_fetch_metadata, g["mint"])
             if market_cap_usd is None:
                 continue
             previous = g["market_cap_usd"]
@@ -106,10 +135,14 @@ async def watch(on_graduation=None, on_new_token=None, reconnect_delay=5):
                     is_migration = "migrat" in kind or "graduat" in kind or event.get("pool") == "pump-amm"
 
                     if is_migration:
-                        fetched_symbol, fetched_name, market_cap_usd, image_uri = await asyncio.to_thread(_fetch_metadata, mint)
+                        fetched_symbol, fetched_name, market_cap_usd, image_uri, creator = await asyncio.to_thread(_fetch_metadata, mint)
                         symbol = symbol or fetched_symbol
                         name = name or fetched_name
-                        db.record_graduation(mint, symbol, name, raw, when=now, market_cap_usd=market_cap_usd, image_uri=image_uri)
+                        creator_total, creator_graduated = await asyncio.to_thread(fetch_creator_track_record, creator)
+                        db.record_graduation(
+                            mint, symbol, name, raw, when=now, market_cap_usd=market_cap_usd, image_uri=image_uri,
+                            creator=creator, creator_total_coins=creator_total, creator_graduated_coins=creator_graduated,
+                        )
                         record = {"mint": mint, "symbol": symbol, "name": name, "graduated_at": now}
                         print(f"[graduation] {symbol or mint} graduated at {time.strftime('%H:%M:%S', time.localtime(now))}")
                         if on_graduation:

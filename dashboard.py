@@ -19,7 +19,10 @@ from flask import Flask, jsonify, render_template_string
 import db
 import correlate
 import graduation_watcher
-from config import MIN_MARKET_CAP_USD, HIGH_PRIORITY_VELOCITY_PCT, PRE_MARKET_WATCH_WINDOW_MIN
+from config import (
+    MIN_MARKET_CAP_USD, HIGH_PRIORITY_VELOCITY_PCT, PRE_MARKET_WATCH_WINDOW_MIN,
+    CREATOR_SUCCESS_RATE, MIN_CREATOR_COINS,
+)
 
 def dedupe_copycats(rows):
     """pump.fun lets anyone reuse a popular name AND/OR ticker for a
@@ -312,8 +315,9 @@ PAGE = """
     <button class="tab active" data-filter="all">All</button>
     <button class="tab" data-filter="Broader interest">Broader Interest</button>
     <button class="tab" data-filter="Concentrated activity">Concentrated Activity</button>
+    <button class="tab" data-filter="Proven creator">&#127942; Proven Creators</button>
   </div>
-  <p class="tab-note" id="tab-note">Based on how many different people are posting vs. one or two accounts repeating themselves -- not a safety rating. Every token here carries real risk either way.</p>
+  <p class="tab-note" id="tab-note">Based on how many different people are posting vs. one or two accounts repeating themselves -- not a safety rating. Every token here carries real risk either way. &#127942; Proven Creator = this wallet's launched 2+ coins before and most of them graduated -- past behavior, not a guarantee this one does too.</p>
 
   <div id="table-wrap"></div>
 
@@ -349,6 +353,13 @@ function fmtPct(n) {
   const cls = n > 0 ? 'positive' : n < 0 ? 'critical' : 'normal';
   const sign = n > 0 ? '+' : '';
   return `<span class="badge ${cls}">${sign}${n.toFixed(1)}%</span>`;
+}
+
+function creatorBadge(r) {
+  if (!r.creator_total_coins) return `<span class="badge muted">Unknown</span>`;
+  const cls = r.is_proven_creator ? 'positive' : 'muted';
+  const label = r.is_proven_creator ? '&#127942; ' : '';
+  return `<span class="badge ${cls}">${label}${r.creator_graduated_coins}/${r.creator_total_coins} graduated</span>`;
 }
 
 function copyMint(mint, el) {
@@ -574,7 +585,9 @@ function renderTable() {
 
   let filtered = activeFilter === 'all'
     ? latestRows
-    : latestRows.filter(r => r.pattern === activeFilter);
+    : activeFilter === 'Proven creator'
+      ? latestRows.filter(r => r.is_proven_creator)
+      : latestRows.filter(r => r.pattern === activeFilter);
   filtered = applySort(filtered.filter(matchesSearch));
 
   if (!filtered.length) {
@@ -597,6 +610,7 @@ function renderTable() {
       </td>
       <td>${scoreBadge(r.score, r.band)}</td>
       <td>${r.pattern}</td>
+      <td>${creatorBadge(r)}</td>
       <td>${timeAgo(r.graduated_at)}</td>
       <td class="num">${fmtUsd(r.market_cap_usd)}</td>
       <td class="num">${fmtPct(r.pct_change)}</td>
@@ -619,7 +633,7 @@ function renderTable() {
   wrap.innerHTML = `
     <table>
       <thead><tr>
-        <th>Token</th>${sortableTh('Attention Score', 'score')}<th>Pattern</th>${sortableTh('Graduated', 'graduated_at')}${sortableTh('Market Cap', 'market_cap_usd')}${sortableTh('% Since Grad', 'pct_change')}${sortableTh('Mentions', 'mention_count')}${sortableTh('Authors', 'distinct_authors')}${sortableTh('First Mention', 'first_mention_at')}${sortableTh('Lead / Lag', 'lead_seconds')}<th>Mint</th>
+        <th>Token</th>${sortableTh('Attention Score', 'score')}<th>Pattern</th><th>Creator</th>${sortableTh('Graduated', 'graduated_at')}${sortableTh('Market Cap', 'market_cap_usd')}${sortableTh('% Since Grad', 'pct_change')}${sortableTh('Mentions', 'mention_count')}${sortableTh('Authors', 'distinct_authors')}${sortableTh('First Mention', 'first_mention_at')}${sortableTh('Lead / Lag', 'lead_seconds')}<th>Mint</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
@@ -719,12 +733,23 @@ def api_data():
         if market_cap_usd is not None and grad_market_cap_usd:
             pct_change = (market_cap_usd - grad_market_cap_usd) / grad_market_cap_usd * 100
 
+        creator_total = g["creator_total_coins"]
+        creator_graduated = g["creator_graduated_coins"]
+        is_proven_creator = (
+            creator_total is not None and creator_total >= MIN_CREATOR_COINS
+            and creator_graduated is not None and creator_graduated / creator_total > CREATOR_SUCCESS_RATE
+        )
+
         rows.append({
             "symbol": g["symbol"],
             "name": g["name"],
             "mint": g["mint"],
             "image_uri": g["image_uri"],
             "graduated_at": g["graduated_at"],
+            "creator": g["creator"],
+            "creator_total_coins": creator_total,
+            "creator_graduated_coins": creator_graduated,
+            "is_proven_creator": is_proven_creator,
             "mention_count": stats["count"],
             "distinct_authors": stats["distinct_authors"],
             "first_mention_at": stats["first_mention_at"],
@@ -762,7 +787,7 @@ def api_data():
             continue
         # Fetch once, reuse for both market cap and logo; cache the image
         # once we have it so we don't keep re-requesting it every refresh.
-        _, _, market_cap_usd, image_uri = graduation_watcher._fetch_metadata(t["mint"])
+        _, _, market_cap_usd, image_uri, _ = graduation_watcher._fetch_metadata(t["mint"])
         image_uri = t["image_uri"] or image_uri
         if image_uri and not t["image_uri"]:
             db.update_new_token_image(t["mint"], image_uri)

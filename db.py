@@ -15,7 +15,10 @@ CREATE TABLE IF NOT EXISTS graduations (
     market_cap_usd REAL,             -- most recently refreshed market cap
     graduation_market_cap_usd REAL,  -- market cap at the moment we saw it graduate
     recent_velocity_pct REAL,        -- % change between the last two refreshes (is it moving *right now*)
-    image_uri TEXT                   -- token logo, from pump.fun's coin API
+    image_uri TEXT,                  -- token logo, from pump.fun's coin API
+    creator TEXT,                    -- deployer wallet address, from pump.fun's coin API
+    creator_total_coins INTEGER,     -- how many coins this wallet has launched (at graduation time)
+    creator_graduated_coins INTEGER  -- how many of those actually graduated
 );
 
 CREATE TABLE IF NOT EXISTS new_tokens (
@@ -74,6 +77,7 @@ def init_db():
         for column, coltype in (
             ("market_cap_usd", "REAL"), ("graduation_market_cap_usd", "REAL"),
             ("recent_velocity_pct", "REAL"), ("image_uri", "TEXT"),
+            ("creator", "TEXT"), ("creator_total_coins", "INTEGER"), ("creator_graduated_coins", "INTEGER"),
         ):
             try:
                 conn.execute(f"ALTER TABLE graduations ADD COLUMN {column} {coltype}")
@@ -85,15 +89,18 @@ def init_db():
             pass  # column already exists
 
 
-def record_graduation(mint, symbol, name, raw_json, when=None, market_cap_usd=None, image_uri=None):
+def record_graduation(mint, symbol, name, raw_json, when=None, market_cap_usd=None, image_uri=None,
+                       creator=None, creator_total_coins=None, creator_graduated_coins=None):
     when = when or time.time()
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO graduations
-               (mint, symbol, name, graduated_at, raw_json, market_cap_usd, graduation_market_cap_usd, image_uri)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               (mint, symbol, name, graduated_at, raw_json, market_cap_usd, graduation_market_cap_usd, image_uri,
+                creator, creator_total_coins, creator_graduated_coins)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(mint) DO NOTHING""",
-            (mint, symbol, name, when, raw_json, market_cap_usd, market_cap_usd, image_uri),
+            (mint, symbol, name, when, raw_json, market_cap_usd, market_cap_usd, image_uri,
+             creator, creator_total_coins, creator_graduated_coins),
         )
 
 
