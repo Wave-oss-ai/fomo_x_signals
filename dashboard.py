@@ -787,7 +787,10 @@ def api_data():
             continue
         # Fetch once, reuse for both market cap and logo; cache the image
         # once we have it so we don't keep re-requesting it every refresh.
-        _, _, market_cap_usd, image_uri, _ = graduation_watcher._fetch_metadata(t["mint"])
+        meta = graduation_watcher._fetch_metadata(t["mint"])
+        if meta["is_banned"] or meta["nsfw"]:
+            continue  # same filter as graduated tokens -- keep the list clean
+        market_cap_usd, image_uri = meta["market_cap_usd"], meta["image_uri"]
         image_uri = t["image_uri"] or image_uri
         if image_uri and not t["image_uri"]:
             db.update_new_token_image(t["mint"], image_uri)

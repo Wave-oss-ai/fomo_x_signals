@@ -33,11 +33,19 @@ def _extract(event: dict, *keys, default=None):
     return default
 
 
+_EMPTY_METADATA = {
+    "symbol": None, "name": None, "market_cap_usd": None, "image_uri": None,
+    "creator": None, "is_banned": False, "nsfw": False,
+}
+
+
 def _fetch_metadata(mint):
     """PumpPortal's migration event doesn't include the token's name/symbol,
-    market cap, logo, or creator wallet, so look them up from pump.fun's own
-    public coin API as a fallback. Best effort only -- any failure just
-    leaves the fields blank rather than holding up the watcher loop."""
+    market cap, logo, creator wallet, or ban/nsfw status, so look them up
+    from pump.fun's own public coin API as a fallback. Best effort only --
+    any failure just leaves the fields blank rather than holding up the
+    watcher loop. Returns a dict (not a tuple) since this keeps growing --
+    positional unpacking was getting fragile."""
     try:
         resp = requests.get(
             f"https://frontend-api-v3.pump.fun/coins/{mint}",
@@ -46,17 +54,21 @@ def _fetch_metadata(mint):
         )
         resp.raise_for_status()
         data = resp.json()
-        return (
-            data.get("symbol"), data.get("name"), data.get("usd_market_cap"),
-            data.get("image_uri"), data.get("creator"),
-        )
+        return {
+            "symbol": data.get("symbol"),
+            "name": data.get("name"),
+            "market_cap_usd": data.get("usd_market_cap"),
+            "image_uri": data.get("image_uri"),
+            "creator": data.get("creator"),
+            "is_banned": bool(data.get("is_banned")),
+            "nsfw": bool(data.get("nsfw")),
+        }
     except Exception:
-        return None, None, None, None, None
+        return dict(_EMPTY_METADATA)
 
 
 def _fetch_market_cap(mint):
-    _, _, market_cap_usd, _, _ = _fetch_metadata(mint)
-    return market_cap_usd
+    return _fetch_metadata(mint)["market_cap_usd"]
 
 
 def fetch_creator_track_record(creator):
@@ -92,7 +104,8 @@ async def refresh_market_caps(interval_sec=MARKET_CAP_REFRESH_SEC):
     catches a push while it's happening, rather than only after the fact."""
     while True:
         for g in db.recent_graduations():
-            _, _, market_cap_usd, image_uri, _ = await asyncio.to_thread(_fetch_metadata, g["mint"])
+            meta = await asyncio.to_thread(_fetch_metadata, g["mint"])
+            market_cap_usd, image_uri = meta["market_cap_usd"], meta["image_uri"]
             if market_cap_usd is None:
                 continue
             previous = g["market_cap_usd"]
@@ -135,13 +148,20 @@ async def watch(on_graduation=None, on_new_token=None, reconnect_delay=5):
                     is_migration = "migrat" in kind or "graduat" in kind or event.get("pool") == "pump-amm"
 
                     if is_migration:
-                        fetched_symbol, fetched_name, market_cap_usd, image_uri, creator = await asyncio.to_thread(_fetch_metadata, mint)
-                        symbol = symbol or fetched_symbol
-                        name = name or fetched_name
-                        creator_total, creator_graduated = await asyncio.to_thread(fetch_creator_track_record, creator)
+                        meta = await asyncio.to_thread(_fetch_metadata, mint)
+                        if meta["is_banned"] or meta["nsfw"]:
+                            # Legit trading platforms (fomo.family included)
+                            # filter these out before ever showing them, so
+                            # we skip recording it at all rather than
+                            # showing something fomo wouldn't.
+                            print(f"[graduation] skipped {symbol or mint} -- banned/nsfw on pump.fun")
+                            continue
+                        symbol = symbol or meta["symbol"]
+                        name = name or meta["name"]
+                        creator_total, creator_graduated = await asyncio.to_thread(fetch_creator_track_record, meta["creator"])
                         db.record_graduation(
-                            mint, symbol, name, raw, when=now, market_cap_usd=market_cap_usd, image_uri=image_uri,
-                            creator=creator, creator_total_coins=creator_total, creator_graduated_coins=creator_graduated,
+                            mint, symbol, name, raw, when=now, market_cap_usd=meta["market_cap_usd"], image_uri=meta["image_uri"],
+                            creator=meta["creator"], creator_total_coins=creator_total, creator_graduated_coins=creator_graduated,
                         )
                         record = {"mint": mint, "symbol": symbol, "name": name, "graduated_at": now}
                         print(f"[graduation] {symbol or mint} graduated at {time.strftime('%H:%M:%S', time.localtime(now))}")
