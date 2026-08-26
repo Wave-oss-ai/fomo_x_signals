@@ -21,6 +21,65 @@ import correlate
 import graduation_watcher
 from config import MIN_MARKET_CAP_USD, HIGH_PRIORITY_VELOCITY_PCT, PRE_MARKET_WATCH_WINDOW_MIN
 
+def dedupe_copycats(rows):
+    """pump.fun lets anyone reuse a popular name AND/OR ticker for a
+    brand-new, unrelated mint, so copycats can share just the name, just the
+    symbol, or both -- and often spam the *exact same* name repeatedly
+    within seconds (the same deployer relaunching after a rug), or a
+    prefix/suffix variation of a popular name ("Pistacio" / "Baby Pistacio").
+    Union-find groups any rows connected by an exact name/symbol match or by
+    one normalized name being contained in another, then keeps only the
+    highest-market-cap row per group so the list doesn't repeat what looks
+    like "the same" token."""
+    parent = list(range(len(rows)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i, j):
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[rj] = ri
+
+    for key_fn in (lambda r: r["name"], lambda r: r["symbol"]):
+        first_seen = {}
+        for i, r in enumerate(rows):
+            key = key_fn(r)
+            if not key:
+                continue
+            key = key.lower().strip()
+            if key in first_seen:
+                union(first_seen[key], i)
+            else:
+                first_seen[key] = i
+
+    def normalize(s):
+        return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+    norm_names = [normalize(r["name"]) for r in rows]
+    for i in range(len(rows)):
+        a = norm_names[i]
+        if len(a) < 4:
+            continue
+        for j in range(i + 1, len(rows)):
+            b = norm_names[j]
+            if len(b) < 4:
+                continue
+            if a in b or b in a:
+                union(i, j)
+
+    best_by_group = {}
+    for i, r in enumerate(rows):
+        root = find(i)
+        existing = best_by_group.get(root)
+        if existing is None or (r["market_cap_usd"] or 0) > (existing["market_cap_usd"] or 0):
+            best_by_group[root] = r
+    return list(best_by_group.values())
+
+
 app = Flask(__name__)
 DEMO_MODE = os.environ.get("FOMO_DEMO_MODE") == "1"
 
@@ -682,62 +741,7 @@ def api_data():
             "mentions": recent_mentions(g["mint"]),
         })
 
-    # pump.fun lets anyone reuse a popular name AND/OR ticker for a
-    # brand-new, unrelated mint, so copycats can share just the name, just
-    # the symbol, or both. Union-find groups any tokens connected by either
-    # matching field, then we keep only the highest-market-cap mint per
-    # group so the list doesn't repeat what looks like "the same" token.
-    parent = list(range(len(rows)))
-
-    def find(i):
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    def union(i, j):
-        ri, rj = find(i), find(j)
-        if ri != rj:
-            parent[rj] = ri
-
-    for key_fn in (lambda r: r["name"], lambda r: r["symbol"]):
-        first_seen = {}
-        for i, r in enumerate(rows):
-            key = key_fn(r)
-            if not key:
-                continue
-            key = key.lower().strip()
-            if key in first_seen:
-                union(first_seen[key], i)
-            else:
-                first_seen[key] = i
-
-    # Copycats also spam with a prefix/suffix tacked onto a popular name
-    # ("Pistacio" / "Baby Pistacio" / "Would Pistacio") rather than an exact
-    # repeat -- catch those by treating one name as a match if it's fully
-    # contained in another once punctuation/spacing is stripped.
-    def normalize(s):
-        return re.sub(r"[^a-z0-9]", "", (s or "").lower())
-
-    norm_names = [normalize(r["name"]) for r in rows]
-    for i in range(len(rows)):
-        a = norm_names[i]
-        if len(a) < 4:
-            continue
-        for j in range(i + 1, len(rows)):
-            b = norm_names[j]
-            if len(b) < 4:
-                continue
-            if a in b or b in a:
-                union(i, j)
-
-    best_by_group = {}
-    for i, r in enumerate(rows):
-        root = find(i)
-        existing = best_by_group.get(root)
-        if existing is None or (r["market_cap_usd"] or 0) > (existing["market_cap_usd"] or 0):
-            best_by_group[root] = r
-    rows = list(best_by_group.values())
+    rows = dedupe_copycats(rows)
 
     # High-priority (actively pushing right now) tokens float to the very
     # top; within that, newest graduations first so fresh tokens don't get
@@ -782,6 +786,7 @@ def api_data():
             "market_cap_usd": market_cap_usd,
             "mentions": recent_mentions(t["mint"]),
         })
+    pre_market_rows = dedupe_copycats(pre_market_rows)
     pre_market_rows.sort(key=lambda r: r["score"], reverse=True)
 
     # Pre-launch: raw X chatter about tokens that haven't even launched
