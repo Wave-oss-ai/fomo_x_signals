@@ -12,6 +12,7 @@ at once: `python main.py` in one terminal collecting data, `python
 dashboard.py` in another to watch it.
 """
 import os
+import re
 
 from flask import Flask, jsonify, render_template_string
 
@@ -710,6 +711,25 @@ def api_data():
                 union(first_seen[key], i)
             else:
                 first_seen[key] = i
+
+    # Copycats also spam with a prefix/suffix tacked onto a popular name
+    # ("Pistacio" / "Baby Pistacio" / "Would Pistacio") rather than an exact
+    # repeat -- catch those by treating one name as a match if it's fully
+    # contained in another once punctuation/spacing is stripped.
+    def normalize(s):
+        return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+    norm_names = [normalize(r["name"]) for r in rows]
+    for i in range(len(rows)):
+        a = norm_names[i]
+        if len(a) < 4:
+            continue
+        for j in range(i + 1, len(rows)):
+            b = norm_names[j]
+            if len(b) < 4:
+                continue
+            if a in b or b in a:
+                union(i, j)
 
     best_by_group = {}
     for i, r in enumerate(rows):
